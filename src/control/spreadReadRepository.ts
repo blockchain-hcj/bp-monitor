@@ -5,6 +5,8 @@ export interface SpreadTimelinePoint {
   symbol: string;
   tsIngest: number;
   tsExchange: number;
+  exchangeA: string;
+  exchangeB: string;
   bpsAToB: number;
   bpsBToA: number;
   bestBidA: number | null;
@@ -19,12 +21,19 @@ export interface SpreadTimelineQuery {
   toMs: number;
   bucketMs: number;
   limit: number;
+  exchangeA?: string;
+  exchangeB?: string;
 }
 
 interface SpreadRow {
   event_time: Date;
   symbol: string;
   payload: Partial<SpreadEvent> | null;
+}
+
+export interface ExchangePair {
+  exchangeA: string;
+  exchangeB: string;
 }
 
 export class PostgresSpreadReadRepository {
@@ -50,7 +59,15 @@ export class PostgresSpreadReadRepository {
   }
 
   async queryTimeline(query: SpreadTimelineQuery): Promise<SpreadTimelinePoint[]> {
-    const params: Array<string | number> = [query.symbol, query.fromMs, query.toMs, query.bucketMs, query.limit];
+    const params: Array<string | number> = [
+      query.symbol,
+      query.fromMs,
+      query.toMs,
+      query.bucketMs,
+      query.limit,
+      query.exchangeA ?? "",
+      query.exchangeB ?? ""
+    ];
     const sql = `
       WITH filtered AS (
         SELECT
@@ -62,6 +79,8 @@ export class PostgresSpreadReadRepository {
         WHERE symbol = $1
           AND event_time >= to_timestamp($2 / 1000.0)
           AND event_time <= to_timestamp($3 / 1000.0)
+          AND ($6 = '' OR payload->>'exchange_a' = $6)
+          AND ($7 = '' OR payload->>'exchange_b' = $7)
       ),
       ranked AS (
         SELECT
@@ -84,6 +103,34 @@ export class PostgresSpreadReadRepository {
       .filter((row): row is SpreadTimelinePoint => row !== null);
   }
 
+  async listRecentExchangePairs(symbol: string, days: number, limit: number): Promise<ExchangePair[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const sql = `
+      SELECT
+        payload->>'exchange_a' AS exchange_a,
+        payload->>'exchange_b' AS exchange_b,
+        max(event_time) AS last_time
+      FROM spread_events
+      WHERE symbol = $1
+        AND event_time >= now() - ($2::text || ' days')::interval
+      GROUP BY payload->>'exchange_a', payload->>'exchange_b'
+      ORDER BY last_time DESC
+      LIMIT $3
+    `;
+    const { rows } = await this.pool.query<{ exchange_a: string | null; exchange_b: string | null }>(sql, [
+      symbol,
+      safeDays,
+      safeLimit
+    ]);
+    return rows
+      .map((row) => ({
+        exchangeA: (row.exchange_a ?? "").trim(),
+        exchangeB: (row.exchange_b ?? "").trim()
+      }))
+      .filter((pair) => Boolean(pair.exchangeA) && Boolean(pair.exchangeB));
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -94,6 +141,8 @@ export class PostgresSpreadReadRepository {
     const tsExchangeRaw = payload.ts_exchange ?? tsIngestRaw;
     const bpsAToBRaw = payload.bps_a_to_b;
     const bpsBToARaw = payload.bps_b_to_a;
+    const exchangeARaw = payload.exchange_a;
+    const exchangeBRaw = payload.exchange_b;
     const bestBidARaw = payload.best_bid_a;
     const bestAskARaw = payload.best_ask_a;
     const bestBidBRaw = payload.best_bid_b;
@@ -112,6 +161,8 @@ export class PostgresSpreadReadRepository {
       symbol: row.symbol,
       tsIngest,
       tsExchange,
+      exchangeA: typeof exchangeARaw === "string" && exchangeARaw ? exchangeARaw : "binance",
+      exchangeB: typeof exchangeBRaw === "string" && exchangeBRaw ? exchangeBRaw : "okx",
       bpsAToB,
       bpsBToA,
       bestBidA: this.toFiniteOrNull(bestBidARaw),

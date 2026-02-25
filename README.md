@@ -1,9 +1,10 @@
-# CEX Spread Monitor (Binance + OKX)
+# Spread Monitor (Binance + OKX + Optional DeepBook)
 
 Low-latency monitoring service for cross-CEX long/short arbitrage references.
 
 ## Features
 - Binance Futures + OKX Swap top-of-book monitoring
+- Optional DeepBook top-of-book polling (via `@mysten/deepbook-v3`)
 - Dual-direction bid-ask spread calculation in bps
 - WS-first ingestion with REST snapshot recovery on sequence gap
 - Per-update event output to NATS JetStream
@@ -16,7 +17,15 @@ Low-latency monitoring service for cross-CEX long/short arbitrage references.
 - `bps_b_to_a = ((bid_A - ask_B) / mid_ref) * 10000`
 - `mid_ref = (mid_A + mid_B) / 2`
 
-Where `A=binance`, `B=okx` in current implementation.
+Where `A/B` are any enabled exchange pair for the same symbol.
+
+## DeepBook (Optional)
+- Install dependencies when network is available:
+  - `npm install @mysten/deepbook-v3 @mysten/sui`
+- Enable in `.env`:
+  - `DEEPBOOK_ENABLED=true`
+  - `DEEPBOOK_NETWORK=mainnet` (or `testnet`)
+  - `DEEPBOOK_POOL_MAP=SUIUSDT:SUI_USDC` (format: `SYMBOL:POOL_KEY`, comma separated)
 
 ## Quick Start
 1. Start dependencies:
@@ -26,7 +35,7 @@ Where `A=binance`, `B=okx` in current implementation.
 3. Configure env:
    - `cp .env.example .env`
 4. Start:
-   - `npm run dev`
+   - `   `
    - (This runs `build + dist` startup to keep worker_threads stable.)
 
 ## Control Plane
@@ -34,12 +43,11 @@ Where `A=binance`, `B=okx` in current implementation.
 - `GET /readyz`
 - `GET /metrics`
 - `GET /timeline`
-  - Frontend dashboard for BPS spread timeline visualization (with latest prices and hover details).
+  - Frontend dashboard for BPS spread timeline visualization.
 - `GET /api/symbols`
   - Returns available symbols from config + recent DB data.
 - `GET /api/spreads?symbol=BTCUSDT&windowMin=60&limit=360`
   - Returns spread timeline points and summary stats.
-  - `limit` means target point count (time-bucketed), not raw tick count.
 - `PUT /config/symbols`
   - body: `{ "symbols": ["BTCUSDT", "ETHUSDT"] }`
 - `PUT /config/thresholds`
@@ -48,13 +56,6 @@ Where `A=binance`, `B=okx` in current implementation.
 ## Database
 Table `spread_events` is auto-created on startup. SQL is also available in:
 - `db/schema.sql`
-
-### Retention & Sampling
-- `DB_RETENTION_DAYS` (default `7`): keep only recent days in PostgreSQL.
-- `DB_RETENTION_CLEANUP_INTERVAL_MS` (default `3600000`): retention cleanup interval.
-- `DB_SAMPLE_INTERVAL_MS` (default `1000`): DB insert downsampling interval per symbol in milliseconds.
-  - Example: `1000` means at most 1 row/second/symbol in DB.
-  - This only down-samples DB persistence. Real-time publishing remains unchanged.
 
 ## Notes
 - Runtime target: Node.js 22+

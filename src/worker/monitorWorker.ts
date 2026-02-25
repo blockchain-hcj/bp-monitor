@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { BinanceConnector } from "../connectors/binanceConnector.js";
+import { DeepbookConnector } from "../connectors/deepbookConnector.js";
 import { OkxConnector } from "../connectors/okxConnector.js";
 import { TopOfBookStore } from "../ingestor/topOfBookStore.js";
 import { MetricsRegistry } from "../observability/metrics.js";
@@ -7,6 +8,8 @@ import { NatsEventPublisher } from "../publisher/natsPublisher.js";
 import { DefaultSpreadCalculator } from "../spread/spreadCalculator.js";
 import { PostgresSpreadRepository } from "../storage/postgresRepository.js";
 import {
+  Exchange,
+  ExchangeConnector,
   MainToWorkerMessage,
   OrderbookDelta,
   RuntimeConfig,
@@ -33,6 +36,8 @@ class MonitorWorkerService {
   private readonly repo: PostgresSpreadRepository;
   private readonly binance = new BinanceConnector();
   private readonly okx = new OkxConnector();
+  private readonly deepbook: DeepbookConnector;
+  private readonly connectors: Record<Exchange, ExchangeConnector>;
   private readonly limiter = new TaskLimiter(2000);
   private symbols: string[];
   private thresholds: RuntimeConfig["thresholds"];
@@ -40,7 +45,7 @@ class MonitorWorkerService {
   private config: RuntimeConfig;
   private lastEventAtMs = 0;
   private readonly snapshotInFlight = new Set<string>();
-  private readonly persistedDbBucketBySymbol = new Map<string, number>();
+  private readonly persistedDbBucketByPair = new Map<string, number>();
   private retentionCleanupInFlight = false;
 
   constructor(params: WorkerData) {
@@ -51,6 +56,12 @@ class MonitorWorkerService {
     this.publisher = new NatsEventPublisher(params.config);
     this.repo = new PostgresSpreadRepository(params.config);
     this.logger = new Logger(params.config.logLevel, `worker-${this.workerId}`);
+    this.deepbook = new DeepbookConnector(params.config.deepbook);
+    this.connectors = {
+      binance: this.binance,
+      okx: this.okx,
+      deepbook: this.deepbook
+    };
   }
 
   async start(): Promise<void> {
@@ -58,8 +69,9 @@ class MonitorWorkerService {
     await this.publisher.init();
     await this.repo.init();
 
-    this.runConnector("binance");
-    this.runConnector("okx");
+    for (const exchange of this.enabledExchanges()) {
+      this.runConnector(exchange);
+    }
 
     setInterval(() => this.emitHealth(), 1000).unref();
     if (this.config.dbRetentionDays > 0 && this.config.dbRetentionCleanupIntervalMs > 0) {
@@ -76,7 +88,7 @@ class MonitorWorkerService {
 
   async stop(): Promise<void> {
     this.running = false;
-    await Promise.all([this.binance.close(), this.okx.close()]);
+    await Promise.all(this.enabledExchanges().map((exchange) => this.connectors[exchange].close()));
     await Promise.all([this.publisher.close(), this.repo.close()]);
   }
 
@@ -88,19 +100,24 @@ class MonitorWorkerService {
     if (update.symbols) {
       this.symbols = update.symbols;
       this.trimDbSamplingState();
-      await Promise.all([this.binance.close(), this.okx.close()]);
+      await Promise.all(this.enabledExchanges().map((exchange) => this.connectors[exchange].close()));
       if (this.running) {
-        this.runConnector("binance");
-        this.runConnector("okx");
+        for (const exchange of this.enabledExchanges()) {
+          this.runConnector(exchange);
+        }
       }
     }
   }
 
-  private runConnector(exchange: "binance" | "okx"): void {
+  private enabledExchanges(): Exchange[] {
+    return this.config.deepbook.enabled ? ["binance", "okx", "deepbook"] : ["binance", "okx"];
+  }
+
+  private runConnector(exchange: Exchange): void {
     if (this.symbols.length === 0) {
       return;
     }
-    const stream = exchange === "binance" ? this.binance.connect(this.symbols) : this.okx.connect(this.symbols);
+    const stream = this.connectors[exchange].connect(this.symbols);
     void (async () => {
       try {
         for await (const delta of stream) {
@@ -125,18 +142,26 @@ class MonitorWorkerService {
       await this.recoverSnapshot(delta);
     }
 
-    const binanceTop = this.topStore.get("binance", delta.symbol);
-    const okxTop = this.topStore.get("okx", delta.symbol);
-    if (!binanceTop || !okxTop) {
+    const tops = this.enabledExchanges()
+      .map((exchange) => this.topStore.get(exchange, delta.symbol))
+      .filter((top): top is NonNullable<typeof top> => Boolean(top));
+    if (tops.length < 2) {
       return;
     }
 
-    const event = this.calc.compute(binanceTop, okxTop);
+    for (let i = 0; i < tops.length - 1; i += 1) {
+      for (let j = i + 1; j < tops.length; j += 1) {
+        const event = this.calc.compute(tops[i], tops[j]);
+        await this.pipelineEvent(event);
+      }
+    }
+  }
+
+  private async pipelineEvent(event: SpreadEvent): Promise<void> {
     const minBpsAbs = Math.max(0, this.thresholds.minBpsAbs);
     if (Math.abs(event.bps_a_to_b) < minBpsAbs && Math.abs(event.bps_b_to_a) < minBpsAbs) {
       return;
     }
-
     event.ts_publish = Date.now();
     const dbPersistPlan = this.planDbPersist(event);
     if (!dbPersistPlan.persist) {
@@ -151,10 +176,10 @@ class MonitorWorkerService {
         this.metrics.incCounter("spread_event_published_total");
         this.metrics.observe("spread_e2e_latency_ms", this.lastEventAtMs - event.ts_ingest);
       } catch (error) {
-        if (dbPersistPlan.persist && dbPersistPlan.bucket !== null) {
-          const currentBucket = this.persistedDbBucketBySymbol.get(event.symbol);
+        if (dbPersistPlan.persist && dbPersistPlan.bucket !== null && dbPersistPlan.key) {
+          const currentBucket = this.persistedDbBucketByPair.get(dbPersistPlan.key);
           if (currentBucket === dbPersistPlan.bucket) {
-            this.persistedDbBucketBySymbol.delete(event.symbol);
+            this.persistedDbBucketByPair.delete(dbPersistPlan.key);
           }
         }
         this.metrics.incCounter("spread_event_publish_error_total");
@@ -168,36 +193,38 @@ class MonitorWorkerService {
     });
 
     if (!accepted) {
-      if (dbPersistPlan.persist && dbPersistPlan.bucket !== null) {
-        const currentBucket = this.persistedDbBucketBySymbol.get(event.symbol);
+      if (dbPersistPlan.persist && dbPersistPlan.bucket !== null && dbPersistPlan.key) {
+        const currentBucket = this.persistedDbBucketByPair.get(dbPersistPlan.key);
         if (currentBucket === dbPersistPlan.bucket) {
-          this.persistedDbBucketBySymbol.delete(event.symbol);
+          this.persistedDbBucketByPair.delete(dbPersistPlan.key);
         }
       }
       this.metrics.incCounter("spread_backpressure_drop_total");
     }
   }
 
-  private planDbPersist(event: SpreadEvent): { persist: boolean; bucket: number | null } {
+  private planDbPersist(event: SpreadEvent): { persist: boolean; bucket: number | null; key: string | null } {
     const sampleIntervalMs = Math.max(0, this.config.dbSampleIntervalMs);
     if (sampleIntervalMs <= 1) {
-      return { persist: true, bucket: null };
+      return { persist: true, bucket: null, key: null };
     }
 
+    const key = `${event.symbol}:${event.exchange_a}:${event.exchange_b}`;
     const bucket = Math.floor(event.ts_ingest / sampleIntervalMs);
-    const previousBucket = this.persistedDbBucketBySymbol.get(event.symbol);
+    const previousBucket = this.persistedDbBucketByPair.get(key);
     if (previousBucket === bucket) {
-      return { persist: false, bucket };
+      return { persist: false, bucket, key };
     }
-    this.persistedDbBucketBySymbol.set(event.symbol, bucket);
-    return { persist: true, bucket };
+    this.persistedDbBucketByPair.set(key, bucket);
+    return { persist: true, bucket, key };
   }
 
   private trimDbSamplingState(): void {
     const activeSymbols = new Set(this.symbols);
-    for (const symbol of this.persistedDbBucketBySymbol.keys()) {
+    for (const key of this.persistedDbBucketByPair.keys()) {
+      const symbol = key.split(":")[0];
       if (!activeSymbols.has(symbol)) {
-        this.persistedDbBucketBySymbol.delete(symbol);
+        this.persistedDbBucketByPair.delete(key);
       }
     }
   }
@@ -235,10 +262,7 @@ class MonitorWorkerService {
     }
     this.snapshotInFlight.add(key);
     try {
-      const snapshot =
-        delta.exchange === "binance"
-          ? await this.binance.snapshot(delta.symbol)
-          : await this.okx.snapshot(delta.symbol);
+      const snapshot = await this.connectors[delta.exchange].snapshot(delta.symbol);
       this.topStore.upsert(
         {
           exchange: snapshot.exchange,
@@ -265,13 +289,15 @@ class MonitorWorkerService {
   }
 
   private emitHealth(): void {
+    const exchanges = this.enabledExchanges();
+    const connectorHealth = exchanges.map((exchange) => this.connectors[exchange].health());
     const health = {
       type: "health" as const,
       workerId: this.workerId,
-      connected: this.binance.health().connected && this.okx.health().connected,
+      connected: connectorHealth.every((item) => item.connected),
       lastEventAtMs: this.lastEventAtMs,
       symbols: this.symbols,
-      error: this.binance.health().lastError ?? this.okx.health().lastError
+      error: connectorHealth.map((item) => item.lastError).find(Boolean)
     };
     this.emit(health);
 

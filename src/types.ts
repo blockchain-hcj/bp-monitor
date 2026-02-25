@@ -1,4 +1,4 @@
-export type Exchange = "binance" | "okx";
+export type Exchange = "binance" | "okx" | "deepbook";
 export type MarketType = "usdt_perp";
 
 export interface OrderbookDelta {
@@ -112,7 +112,17 @@ export interface RuntimeConfig {
   dbSampleIntervalMs: number;
   dbRetentionDays: number;
   dbRetentionCleanupIntervalMs: number;
+  deepbook: DeepbookRuntimeConfig;
   thresholds: ThresholdConfig;
+}
+
+export interface DeepbookRuntimeConfig {
+  enabled: boolean;
+  network: "mainnet" | "testnet";
+  rpcUrl?: string;
+  address: string;
+  pollIntervalMs: number;
+  symbolPoolMap: Record<string, string>;
 }
 
 export interface WorkerInitMessage {

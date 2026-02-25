@@ -252,7 +252,7 @@ export function renderTimelinePage(): string {
     <section class="title-card">
       <div>
         <h1 class="title">BPS Spread Timeline</h1>
-        <p class="subtitle">Binance & OKX bid-ask spread in basis points along a rolling time window.</p>
+        <p class="subtitle">Cross-exchange bid-ask spread in basis points along a rolling time window.</p>
       </div>
       <div class="tag" id="refresh-tag">auto refresh: 5s</div>
     </section>
@@ -261,6 +261,10 @@ export function renderTimelinePage(): string {
       <label>
         Symbol
         <select id="symbol"></select>
+      </label>
+      <label>
+        Exchange Pair
+        <select id="pair"></select>
       </label>
       <label>
         Window
@@ -290,8 +294,8 @@ export function renderTimelinePage(): string {
     <section class="meta-grid">
       <article class="metric"><div class="k">Latest A→B</div><div class="v" id="latest-a">-</div></article>
       <article class="metric"><div class="k">Latest B→A</div><div class="v" id="latest-b">-</div></article>
-      <article class="metric"><div class="k">Binance Mid</div><div class="v" id="latest-mid-a">-</div></article>
-      <article class="metric"><div class="k">OKX Mid</div><div class="v" id="latest-mid-b">-</div></article>
+      <article class="metric"><div class="k" id="mid-a-label">A Mid</div><div class="v" id="latest-mid-a">-</div></article>
+      <article class="metric"><div class="k" id="mid-b-label">B Mid</div><div class="v" id="latest-mid-b">-</div></article>
       <article class="metric"><div class="k">Max |BPS|</div><div class="v" id="max-abs">-</div></article>
       <article class="metric"><div class="k">Samples</div><div class="v" id="count">-</div></article>
     </section>
@@ -304,6 +308,7 @@ export function renderTimelinePage(): string {
     const chart = document.getElementById("chart");
     const ctx = chart.getContext("2d");
     const symbolEl = document.getElementById("symbol");
+    const pairEl = document.getElementById("pair");
     const windowEl = document.getElementById("window");
     const limitEl = document.getElementById("limit");
     const refreshBtn = document.getElementById("refresh");
@@ -312,9 +317,39 @@ export function renderTimelinePage(): string {
     const latestBEl = document.getElementById("latest-b");
     const latestMidAEl = document.getElementById("latest-mid-a");
     const latestMidBEl = document.getElementById("latest-mid-b");
+    const midALabelEl = document.getElementById("mid-a-label");
+    const midBLabelEl = document.getElementById("mid-b-label");
     const maxAbsEl = document.getElementById("max-abs");
     const countEl = document.getElementById("count");
     const tooltipEl = document.getElementById("tooltip");
+    let activePair = { exchangeA: "", exchangeB: "" };
+
+    function titleCaseExchange(exchange) {
+      if (!exchange) {
+        return "-";
+      }
+      const raw = String(exchange).trim();
+      if (!raw) {
+        return "-";
+      }
+      return raw.charAt(0).toUpperCase() + raw.slice(1);
+    }
+
+    function selectedPair() {
+      const raw = pairEl.value || "";
+      const parts = raw.split("|");
+      return {
+        exchangeA: (parts[0] || "").trim().toLowerCase(),
+        exchangeB: (parts[1] || "").trim().toLowerCase()
+      };
+    }
+
+    function setPairLabels(exchangeA, exchangeB) {
+      const a = titleCaseExchange(exchangeA);
+      const b = titleCaseExchange(exchangeB);
+      midALabelEl.textContent = a + " Mid";
+      midBLabelEl.textContent = b + " Mid";
+    }
 
     let lastPoints = [];
     let poller = null;
@@ -385,6 +420,10 @@ export function renderTimelinePage(): string {
     }
 
     function showTooltip(point, clientX, clientY) {
+      const exchangeA = point.exchangeA || activePair.exchangeA || "a";
+      const exchangeB = point.exchangeB || activePair.exchangeB || "b";
+      const exchangeATitle = titleCaseExchange(exchangeA);
+      const exchangeBTitle = titleCaseExchange(exchangeB);
       const bidA = toFiniteOrNaN(point.bestBidA);
       const askA = toFiniteOrNaN(point.bestAskA);
       const bidB = toFiniteOrNaN(point.bestBidB);
@@ -401,20 +440,28 @@ export function renderTimelinePage(): string {
         '<div class="t-row"><span>BPS B→A</span><span>' +
         bpsText(toFiniteOrNaN(point.bpsBToA)) +
         "</span></div>" +
-        '<div class="t-row"><span>Binance Bid/Ask</span><span>' +
+        '<div class="t-row"><span>' +
+        exchangeATitle +
+        ' Bid/Ask</span><span>' +
         priceText(bidA) +
         " / " +
         priceText(askA) +
         "</span></div>" +
-        '<div class="t-row"><span>Binance Mid</span><span>' +
+        '<div class="t-row"><span>' +
+        exchangeATitle +
+        ' Mid</span><span>' +
         priceText(midA) +
         "</span></div>" +
-        '<div class="t-row"><span>OKX Bid/Ask</span><span>' +
+        '<div class="t-row"><span>' +
+        exchangeBTitle +
+        ' Bid/Ask</span><span>' +
         priceText(bidB) +
         " / " +
         priceText(askB) +
         "</span></div>" +
-        '<div class="t-row"><span>OKX Mid</span><span>' +
+        '<div class="t-row"><span>' +
+        exchangeBTitle +
+        ' Mid</span><span>' +
         priceText(midB) +
         "</span></div>";
 
@@ -774,12 +821,15 @@ export function renderTimelinePage(): string {
 
     async function fetchTimeline() {
       const symbol = symbolEl.value;
+      const pair = selectedPair();
       const windowMin = Number(windowEl.value);
       const limit = Number(limitEl.value);
       const query = new URLSearchParams({
         symbol,
         windowMin: String(windowMin),
-        limit: String(limit)
+        limit: String(limit),
+        exchangeA: pair.exchangeA,
+        exchangeB: pair.exchangeB
       });
       const res = await fetch("/api/spreads?" + query.toString());
       if (!res.ok) {
@@ -787,6 +837,40 @@ export function renderTimelinePage(): string {
         throw new Error(msg || "Failed to load timeline");
       }
       return res.json();
+    }
+
+    async function fetchExchangePairs(symbol) {
+      const query = new URLSearchParams({ symbol });
+      const res = await fetch("/api/exchange-pairs?" + query.toString());
+      if (!res.ok) {
+        throw new Error("Failed to load exchange pairs");
+      }
+      const data = await res.json();
+      return Array.isArray(data.pairs) ? data.pairs : [];
+    }
+
+    async function loadPairOptions(symbol) {
+      const pairs = await fetchExchangePairs(symbol);
+      pairEl.innerHTML = "";
+      for (const pair of pairs) {
+        const exchangeA = String(pair.exchangeA || "").trim().toLowerCase();
+        const exchangeB = String(pair.exchangeB || "").trim().toLowerCase();
+        if (!exchangeA || !exchangeB) {
+          continue;
+        }
+        const option = document.createElement("option");
+        option.value = exchangeA + "|" + exchangeB;
+        option.textContent = titleCaseExchange(exchangeA) + " \u2194 " + titleCaseExchange(exchangeB);
+        pairEl.appendChild(option);
+      }
+      if (pairEl.options.length === 0) {
+        throw new Error("No exchange pairs available for selected symbol");
+      }
+      if (!pairEl.value) {
+        pairEl.value = pairEl.options[0].value;
+      }
+      activePair = selectedPair();
+      setPairLabels(activePair.exchangeA, activePair.exchangeB);
     }
 
     async function refresh() {
@@ -801,6 +885,15 @@ export function renderTimelinePage(): string {
         drawTimeline(points);
 
         const latest = points.length > 0 ? points[points.length - 1] : null;
+        if (latest && latest.exchangeA && latest.exchangeB) {
+          activePair = {
+            exchangeA: String(latest.exchangeA).toLowerCase(),
+            exchangeB: String(latest.exchangeB).toLowerCase()
+          };
+        } else {
+          activePair = selectedPair();
+        }
+        setPairLabels(activePair.exchangeA, activePair.exchangeB);
         const latestA = latest ? Number(latest.bpsAToB) : NaN;
         const latestB = latest ? Number(latest.bpsBToA) : NaN;
         const latestBidA = latest ? toFiniteOrNaN(latest.bestBidA) : NaN;
@@ -847,6 +940,7 @@ export function renderTimelinePage(): string {
         throw new Error("No symbols available");
       }
       symbolEl.value = symbols[0];
+      await loadPairOptions(symbolEl.value);
       await refresh();
       if (poller) {
         clearInterval(poller);
@@ -855,7 +949,15 @@ export function renderTimelinePage(): string {
     }
 
     refreshBtn.addEventListener("click", refresh);
-    symbolEl.addEventListener("change", refresh);
+    symbolEl.addEventListener("change", async () => {
+      await loadPairOptions(symbolEl.value);
+      await refresh();
+    });
+    pairEl.addEventListener("change", async () => {
+      activePair = selectedPair();
+      setPairLabels(activePair.exchangeA, activePair.exchangeB);
+      await refresh();
+    });
     windowEl.addEventListener("change", refresh);
     limitEl.addEventListener("change", refresh);
     chart.addEventListener("mousemove", onChartMove);

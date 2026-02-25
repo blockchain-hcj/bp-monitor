@@ -35,6 +35,39 @@ function parseFloatEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseBoolEnv(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (!value) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Invalid boolean env ${name}=${value}`);
+}
+
+function parseDeepbookPoolMap(raw: string | undefined): Record<string, string> {
+  if (!raw) {
+    return { SUIUSDT: "SUI_USDC" };
+  }
+  const entries = raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [symbolRaw, poolRaw] = entry.split(":").map((v) => v.trim());
+      if (!symbolRaw || !poolRaw) {
+        throw new Error(`Invalid DEEPBOOK_POOL_MAP entry: ${entry}`);
+      }
+      return [symbolRaw.toUpperCase(), poolRaw] as const;
+    });
+  return Object.fromEntries(entries);
+}
+
 export function loadConfig(): RuntimeConfig {
   const cpuCount = Math.max(1, os.cpus().length - 1);
   return {
@@ -55,6 +88,14 @@ export function loadConfig(): RuntimeConfig {
     dbSampleIntervalMs: parseIntEnv("DB_SAMPLE_INTERVAL_MS", 1_000),
     dbRetentionDays: parseIntEnv("DB_RETENTION_DAYS", 7),
     dbRetentionCleanupIntervalMs: parseIntEnv("DB_RETENTION_CLEANUP_INTERVAL_MS", 3_600_000),
+    deepbook: {
+      enabled: parseBoolEnv("DEEPBOOK_ENABLED", false),
+      network: (process.env.DEEPBOOK_NETWORK as "mainnet" | "testnet") ?? "mainnet",
+      rpcUrl: process.env.DEEPBOOK_RPC_URL?.trim() || "https://fullnode.mainnet.sui.io:443",
+      address: process.env.DEEPBOOK_ADDRESS ?? "0x0000000000000000000000000000000000000000000000000000000000000000",
+      pollIntervalMs: parseIntEnv("DEEPBOOK_POLL_INTERVAL_MS", 1000),
+      symbolPoolMap: parseDeepbookPoolMap(process.env.DEEPBOOK_POOL_MAP)
+    },
     thresholds: {
       minBpsAbs: parseFloatEnv("MIN_BPS_ABS", 0)
     }

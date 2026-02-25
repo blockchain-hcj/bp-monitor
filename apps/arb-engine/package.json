@@ -1,0 +1,24 @@
+{
+  "name": "arb-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --enable-source-maps dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run test/*.test.ts"
+  },
+  "dependencies": {
+    "nats": "^2.29.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

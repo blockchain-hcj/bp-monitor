@@ -114,6 +114,8 @@ export async function startHttpServer(
       const query = parseQuery(req);
       const configured = state.getSymbols();
       const symbol = (query.get("symbol") ?? configured[0] ?? "").toUpperCase().trim();
+      const exchangeA = (query.get("exchangeA") ?? "").trim().toLowerCase();
+      const exchangeB = (query.get("exchangeB") ?? "").trim().toLowerCase();
       if (!symbol) {
         res.writeStatus("400 Bad Request").end("symbol is required");
         return;
@@ -137,7 +139,9 @@ export async function startHttpServer(
         fromMs,
         toMs,
         bucketMs,
-        limit: queryLimit
+        limit: queryLimit,
+        exchangeA: exchangeA || undefined,
+        exchangeB: exchangeB || undefined
       });
       if (aborted) {
         return;
@@ -153,6 +157,8 @@ export async function startHttpServer(
       res.end(
         JSON.stringify({
           symbol,
+          exchangeA: exchangeA || null,
+          exchangeB: exchangeB || null,
           fromMs,
           toMs,
           points,
@@ -168,6 +174,33 @@ export async function startHttpServer(
           }
         })
       );
+    } catch (error) {
+      if (aborted) {
+        return;
+      }
+      res.writeStatus("500 Internal Server Error").end(error instanceof Error ? error.message : "query failed");
+    }
+  });
+
+  app.get("/api/exchange-pairs", async (res: any, req: any) => {
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    try {
+      const query = parseQuery(req);
+      const configured = state.getSymbols();
+      const symbol = (query.get("symbol") ?? configured[0] ?? "").toUpperCase().trim();
+      if (!symbol) {
+        res.writeStatus("400 Bad Request").end("symbol is required");
+        return;
+      }
+      const pairs = await spreadReadRepo.listRecentExchangePairs(symbol, 30, 20);
+      if (aborted) {
+        return;
+      }
+      res.writeHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ symbol, pairs }));
     } catch (error) {
       if (aborted) {
         return;
