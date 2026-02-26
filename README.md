@@ -44,10 +44,14 @@ Where `A/B` are any enabled exchange pair for the same symbol.
 - `GET /metrics`
 - `GET /timeline`
   - Frontend dashboard for BPS spread timeline visualization.
+- `GET /mean-reversion`
+  - Frontend dashboard for intraday mean-reversion decision support (range-regime filtered).
 - `GET /api/symbols`
   - Returns available symbols from config + recent DB data.
 - `GET /api/spreads?symbol=BTCUSDT&windowMin=60&limit=360`
   - Returns spread timeline points and summary stats.
+- `GET /api/mean-reversion?symbol=BTCUSDT&direction=a_to_b&windowMin=240&lookbackBars=30&entryZ=1.8&exitZ=0.35`
+  - Returns strategy points/trades/summary from current spread history data.
 - `PUT /config/symbols`
   - body: `{ "symbols": ["BTCUSDT", "ETHUSDT"] }`
 - `PUT /config/thresholds`

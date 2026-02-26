@@ -1,6 +1,8 @@
 import { ThresholdConfig } from "../types.js";
 import { PostgresSpreadReadRepository } from "./spreadReadRepository.js";
+import { renderMeanReversionPage } from "./meanReversionPage.js";
 import { renderTimelinePage } from "./timelinePage.js";
+import { evaluateMeanReversion } from "../strategy/meanReversion.js";
 
 export interface ControlPlaneState {
   getHealth(): { ok: boolean; workers: unknown };
@@ -29,6 +31,17 @@ function parseBoundedInt(raw: string | null, fallback: number, min: number, max:
     return fallback;
   }
   const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseBoundedNumber(raw: string | null, fallback: number, min: number, max: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
   if (!Number.isFinite(value)) {
     return fallback;
   }
@@ -66,6 +79,11 @@ export async function startHttpServer(
   app.get("/timeline", (res: any) => {
     res.writeHeader("Content-Type", "text/html; charset=utf-8");
     res.end(renderTimelinePage());
+  });
+
+  app.get("/mean-reversion", (res: any) => {
+    res.writeHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(renderMeanReversionPage());
   });
 
   app.get("/healthz", (res: any) => {
@@ -172,6 +190,101 @@ export async function startHttpServer(
             latestAToB: latest?.bpsAToB ?? null,
             latestBToA: latest?.bpsBToA ?? null
           }
+        })
+      );
+    } catch (error) {
+      if (aborted) {
+        return;
+      }
+      res.writeStatus("500 Internal Server Error").end(error instanceof Error ? error.message : "query failed");
+    }
+  });
+
+  app.get("/api/mean-reversion", async (res: any, req: any) => {
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    try {
+      const query = parseQuery(req);
+      const configured = state.getSymbols();
+      const symbol = (query.get("symbol") ?? configured[0] ?? "").toUpperCase().trim();
+      const direction = (query.get("direction") ?? "a_to_b").toLowerCase();
+      const exchangeA = (query.get("exchangeA") ?? "").trim().toLowerCase();
+      const exchangeB = (query.get("exchangeB") ?? "").trim().toLowerCase();
+      if (!symbol) {
+        res.writeStatus("400 Bad Request").end("symbol is required");
+        return;
+      }
+      if (direction !== "a_to_b" && direction !== "b_to_a") {
+        res.writeStatus("400 Bad Request").end("direction must be a_to_b or b_to_a");
+        return;
+      }
+
+      const windowMin = parseBoundedInt(query.get("windowMin"), 240, 30, 1_440);
+      const targetPoints = parseBoundedInt(query.get("limit"), 480, 60, 2_000);
+      const toMs = parseEpochMs(query.get("toMs")) ?? Date.now();
+      const fromMs = parseEpochMs(query.get("fromMs")) ?? toMs - windowMin * 60_000;
+      if (fromMs >= toMs) {
+        res.writeStatus("400 Bad Request").end("fromMs must be smaller than toMs");
+        return;
+      }
+      const windowMs = toMs - fromMs;
+      const bucketMs = Math.max(1_000, Math.ceil(windowMs / targetPoints));
+      const queryLimit = Math.min(3_000, targetPoints + 2);
+      const timeline = await spreadReadRepo.queryTimeline({
+        symbol,
+        fromMs,
+        toMs,
+        bucketMs,
+        limit: queryLimit,
+        exchangeA: exchangeA || undefined,
+        exchangeB: exchangeB || undefined
+      });
+      const points = timeline.map((point) => ({
+        tsMs: point.tsIngest,
+        value: direction === "a_to_b" ? point.bpsAToB : point.bpsBToA
+      }));
+
+      const result = evaluateMeanReversion(points, {
+        lookbackBars: parseBoundedInt(query.get("lookbackBars"), 30, 10, 400),
+        entryZ: parseBoundedNumber(query.get("entryZ"), 1.8, 0.2, 6),
+        exitZ: parseBoundedNumber(query.get("exitZ"), 0.35, 0.05, 4),
+        regimeLookbackBars: parseBoundedInt(query.get("regimeLookbackBars"), 24, 6, 200),
+        minFlipRate: parseBoundedNumber(query.get("minFlipRate"), 0.12, 0, 1),
+        maxTrendStrength: parseBoundedNumber(query.get("maxTrendStrength"), 0.45, 0, 1),
+        maxHoldBars: parseBoundedInt(query.get("maxHoldBars"), 60, 2, 600)
+      });
+
+      if (aborted) {
+        return;
+      }
+
+      res.writeHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          symbol,
+          direction,
+          exchangeA: exchangeA || null,
+          exchangeB: exchangeB || null,
+          fromMs,
+          toMs,
+          sampling: {
+            bucketMs,
+            targetPoints
+          },
+          params: {
+            lookbackBars: parseBoundedInt(query.get("lookbackBars"), 30, 10, 400),
+            entryZ: parseBoundedNumber(query.get("entryZ"), 1.8, 0.2, 6),
+            exitZ: parseBoundedNumber(query.get("exitZ"), 0.35, 0.05, 4),
+            regimeLookbackBars: parseBoundedInt(query.get("regimeLookbackBars"), 24, 6, 200),
+            minFlipRate: parseBoundedNumber(query.get("minFlipRate"), 0.12, 0, 1),
+            maxTrendStrength: parseBoundedNumber(query.get("maxTrendStrength"), 0.45, 0, 1),
+            maxHoldBars: parseBoundedInt(query.get("maxHoldBars"), 60, 2, 600)
+          },
+          points: result.points,
+          summary: result.summary,
+          trades: result.trades
         })
       );
     } catch (error) {
