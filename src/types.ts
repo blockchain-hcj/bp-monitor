@@ -94,11 +94,38 @@ export interface ThresholdConfig {
   minBpsAbs: number;
 }
 
+export interface SymbolDiscoveryConfig {
+  enabled: boolean;
+  refreshIntervalMs: number;
+  binanceExchangeInfoUrl: string;
+  okxInstrumentsUrl: string;
+}
+
+export interface UniverseConfig {
+  coreMaxSymbols: number;
+  watchScanIntervalMs: number;
+}
+
+export interface BasisCandidateConfig {
+  feeBps: number;
+  slippageBps: number;
+  stableWindowMs: number;
+  stableBinSizeBps: number;
+  stableMinBandWidthBps: number;
+  stableMinHitRatio: number;
+  stableMaxBandStdBps: number;
+  spikeAbsNetBps: number;
+  spikeDelta1mBps: number;
+}
+
 export interface RuntimeConfig {
   nodeId: string;
   logLevel: "debug" | "info" | "warn" | "error";
   marketType: MarketType;
   symbols: string[];
+  symbolDiscovery: SymbolDiscoveryConfig;
+  universe: UniverseConfig;
+  basisCandidate: BasisCandidateConfig;
   staleMsLimit: number;
   workerCount: number;
   controlPort: number;

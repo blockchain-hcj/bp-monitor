@@ -102,6 +102,7 @@ export function renderTimelinePage(): string {
     }
 
     select,
+    input,
     button {
       height: 36px;
       border: 1px solid var(--border);
@@ -260,7 +261,8 @@ export function renderTimelinePage(): string {
     <section class="controls">
       <label>
         Symbol
-        <select id="symbol"></select>
+        <input id="symbol" list="symbol-options" placeholder="e.g. BTCUSDT" autocomplete="off" />
+        <datalist id="symbol-options"></datalist>
       </label>
       <label>
         Exchange Pair
@@ -308,6 +310,7 @@ export function renderTimelinePage(): string {
     const chart = document.getElementById("chart");
     const ctx = chart.getContext("2d");
     const symbolEl = document.getElementById("symbol");
+    const symbolOptionsEl = document.getElementById("symbol-options");
     const pairEl = document.getElementById("pair");
     const windowEl = document.getElementById("window");
     const limitEl = document.getElementById("limit");
@@ -820,7 +823,11 @@ export function renderTimelinePage(): string {
     }
 
     async function fetchTimeline() {
-      const symbol = symbolEl.value;
+      const symbol = String(symbolEl.value || "").trim().toUpperCase();
+      if (!symbol) {
+        throw new Error("symbol is required");
+      }
+      symbolEl.value = symbol;
       const pair = selectedPair();
       const windowMin = Number(windowEl.value);
       const limit = Number(limitEl.value);
@@ -850,7 +857,12 @@ export function renderTimelinePage(): string {
     }
 
     async function loadPairOptions(symbol) {
-      const pairs = await fetchExchangePairs(symbol);
+      const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+      if (!normalizedSymbol) {
+        throw new Error("symbol is required");
+      }
+      symbolEl.value = normalizedSymbol;
+      const pairs = await fetchExchangePairs(normalizedSymbol);
       pairEl.innerHTML = "";
       for (const pair of pairs) {
         const exchangeA = String(pair.exchangeA || "").trim().toLowerCase();
@@ -933,8 +945,7 @@ export function renderTimelinePage(): string {
       for (const s of symbols) {
         const option = document.createElement("option");
         option.value = s;
-        option.textContent = s;
-        symbolEl.appendChild(option);
+        symbolOptionsEl.appendChild(option);
       }
       if (symbols.length === 0) {
         throw new Error("No symbols available");
@@ -950,6 +961,13 @@ export function renderTimelinePage(): string {
 
     refreshBtn.addEventListener("click", refresh);
     symbolEl.addEventListener("change", async () => {
+      await loadPairOptions(symbolEl.value);
+      await refresh();
+    });
+    symbolEl.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
       await loadPairOptions(symbolEl.value);
       await refresh();
     });

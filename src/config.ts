@@ -75,6 +75,28 @@ export function loadConfig(): RuntimeConfig {
     logLevel: (process.env.LOG_LEVEL as RuntimeConfig["logLevel"]) ?? "info",
     marketType: "usdt_perp",
     symbols: parseSymbols(process.env.SYMBOLS),
+    symbolDiscovery: {
+      enabled: parseBoolEnv("SYMBOL_DISCOVERY_ENABLED", true),
+      refreshIntervalMs: parseIntEnv("SYMBOL_DISCOVERY_REFRESH_MS", 300_000),
+      binanceExchangeInfoUrl: process.env.BINANCE_EXCHANGE_INFO_URL ?? "https://fapi.binance.com/fapi/v1/exchangeInfo",
+      okxInstrumentsUrl:
+        process.env.OKX_INSTRUMENTS_URL ?? "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+    },
+    universe: {
+      coreMaxSymbols: parseIntEnv("CORE_MAX_SYMBOLS", 40),
+      watchScanIntervalMs: parseIntEnv("WATCH_SCAN_INTERVAL_MS", 15_000)
+    },
+    basisCandidate: {
+      feeBps: parseFloatEnv("BASIS_FEE_BPS", 4),
+      slippageBps: parseFloatEnv("BASIS_SLIPPAGE_BPS", 2),
+      stableWindowMs: parseIntEnv("BASIS_STABLE_WINDOW_MS", 600_000),
+      stableBinSizeBps: parseFloatEnv("BASIS_STABLE_BIN_SIZE_BPS", 2),
+      stableMinBandWidthBps: parseFloatEnv("BASIS_STABLE_MIN_BAND_WIDTH_BPS", 20),
+      stableMinHitRatio: parseFloatEnv("BASIS_STABLE_MIN_HIT_RATIO", 0.65),
+      stableMaxBandStdBps: parseFloatEnv("BASIS_STABLE_MAX_BAND_STD_BPS", 8),
+      spikeAbsNetBps: parseFloatEnv("BASIS_SPIKE_ABS_NET_BPS", 35),
+      spikeDelta1mBps: parseFloatEnv("BASIS_SPIKE_DELTA_1M_BPS", 15)
+    },
     staleMsLimit: parseIntEnv("STALE_MS_LIMIT", 1500),
     workerCount: parseIntEnv("WORKER_COUNT", cpuCount),
     controlPort: parseIntEnv("CONTROL_PORT", 18080),

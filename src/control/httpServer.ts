@@ -1,14 +1,18 @@
 import { ThresholdConfig } from "../types.js";
 import { PostgresSpreadReadRepository } from "./spreadReadRepository.js";
 import { renderMeanReversionPage } from "./meanReversionPage.js";
+import { renderBasisCandidatesPage } from "./basisCandidatesPage.js";
 import { renderTimelinePage } from "./timelinePage.js";
 import { evaluateMeanReversion } from "../strategy/meanReversion.js";
+import { BasisCandidateItem, BasisCandidatesQuery } from "./basisCandidatesService.js";
 
 export interface ControlPlaneState {
   getHealth(): { ok: boolean; workers: unknown };
   getReady(): { ready: boolean; workersReady: number; workersTotal: number };
   getMetrics(): string;
   getSymbols(): string[];
+  getSymbolPools(): { core: string[]; watch: string[] };
+  getBasisCandidates(query: BasisCandidatesQuery): Promise<BasisCandidateItem[]>;
   updateSymbols(symbols: string[]): void;
   updateThresholds(thresholds: ThresholdConfig): void;
 }
@@ -86,6 +90,11 @@ export async function startHttpServer(
     res.end(renderMeanReversionPage());
   });
 
+  app.get("/basis-candidates", (res: any) => {
+    res.writeHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(renderBasisCandidatesPage());
+  });
+
   app.get("/healthz", (res: any) => {
     res.writeHeader("Content-Type", "application/json");
     res.end(JSON.stringify(state.getHealth()));
@@ -115,6 +124,50 @@ export async function startHttpServer(
       const symbols = [...new Set([...configured, ...recent])];
       res.writeHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ symbols }));
+    } catch (error) {
+      if (aborted) {
+        return;
+      }
+      res.writeStatus("500 Internal Server Error").end(error instanceof Error ? error.message : "query failed");
+    }
+  });
+
+  app.get("/api/basis-candidates", async (res: any, req: any) => {
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    try {
+      const query = parseQuery(req);
+      const modeRaw = (query.get("mode") ?? "all").toLowerCase();
+      const sortRaw = (query.get("sort") ?? "score").toLowerCase();
+      const profitableRaw = (query.get("profitable") ?? "all").toLowerCase();
+      const mode = modeRaw === "stable" || modeRaw === "spike" ? modeRaw : "all";
+      const sort =
+        sortRaw === "netbps" ? "netBps" : sortRaw === "updatedat" ? "updatedAt" : sortRaw === "entrytotp" ? "entryToTp" : "score";
+      const profitable = profitableRaw === "true" || profitableRaw === "false" ? profitableRaw : "all";
+      const minScore = parseBoundedNumber(query.get("minScore"), 60, 0, 100);
+      const onlyCore = (query.get("onlyCore") ?? "false").toLowerCase() === "true";
+      const limit = parseBoundedInt(query.get("limit"), 100, 1, 500);
+      const items = await state.getBasisCandidates({ mode, minScore, onlyCore, profitable, limit, sort });
+
+      if (aborted) {
+        return;
+      }
+      res.writeHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          mode,
+          minScore,
+          onlyCore,
+          profitable,
+          limit,
+          sort,
+          pools: state.getSymbolPools(),
+          count: items.length,
+          items
+        })
+      );
     } catch (error) {
       if (aborted) {
         return;

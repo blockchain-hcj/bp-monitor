@@ -1,10 +1,15 @@
 import os from "node:os";
 import { Worker } from "node:worker_threads";
 import { loadConfig } from "./config.js";
+import { BasisCandidatesService } from "./control/basisCandidatesService.js";
+import { BasisCandidatesQuery } from "./control/basisCandidatesService.js";
 import { startHttpServer } from "./control/httpServer.js";
 import { PostgresSpreadReadRepository } from "./control/spreadReadRepository.js";
+import { SymbolDiscoveryService } from "./discovery/symbolDiscovery.js";
 import { MetricsRegistry } from "./observability/metrics.js";
+import { BasisCandidateEngine } from "./strategy/basisCandidateEngine.js";
 import { ThresholdConfig, WorkerToMainMessage } from "./types.js";
+import { UniverseManager } from "./universe/universeManager.js";
 import { assignSymbols } from "./utils/hash.js";
 import { Logger } from "./utils/logger.js";
 
@@ -24,8 +29,14 @@ async function main(): Promise<void> {
   const logger = new Logger(config.logLevel, "main");
   const metrics = new MetricsRegistry();
   const spreadReadRepo = new PostgresSpreadReadRepository(config.postgresUrl);
+  const basisEngine = new BasisCandidateEngine(config.basisCandidate);
+  const basisService = new BasisCandidatesService(spreadReadRepo, basisEngine, config.basisCandidate.stableWindowMs);
+  const discovery = new SymbolDiscoveryService(config.symbolDiscovery, config.symbols);
+  const universeManager = new UniverseManager(config.universe);
+  universeManager.updateDiscoveredSymbols(await discovery.refresh());
 
-  const desiredWorkers = Math.max(1, Math.min(config.workerCount, os.cpus().length, config.symbols.length));
+  let assignedSymbols = universeManager.getCoreSymbols();
+  const desiredWorkers = Math.max(1, Math.min(config.workerCount, os.cpus().length, Math.max(1, assignedSymbols.length)));
   const workers = new Map<number, WorkerState>();
   const isTsRuntime = import.meta.url.endsWith(".ts");
 
@@ -34,7 +45,7 @@ async function main(): Promise<void> {
     : new URL("./worker/monitorWorker.js", import.meta.url);
 
   for (let workerId = 0; workerId < desiredWorkers; workerId += 1) {
-    const shardSymbols = assignSymbols(config.symbols, desiredWorkers, workerId);
+    const shardSymbols = assignSymbols(assignedSymbols, desiredWorkers, workerId);
     const worker = new Worker(workerScript, {
       workerData: {
         workerId,
@@ -94,6 +105,35 @@ async function main(): Promise<void> {
     });
   }
 
+  const updateWorkerSymbols = (symbols: string[]) => {
+    const normalized = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    const next = normalized.length > 0 ? normalized : assignedSymbols;
+    assignedSymbols = next;
+    config.symbols = next;
+    for (const w of workers.values()) {
+      const workerSymbols = assignSymbols(next, workers.size, w.workerId);
+      w.symbols = workerSymbols;
+      w.worker.postMessage({ type: "update-config", symbols: workerSymbols });
+    }
+    metrics.incCounter("spread_config_symbols_update_total");
+  };
+
+  if (config.symbolDiscovery.enabled && config.symbolDiscovery.refreshIntervalMs > 0) {
+    setInterval(
+      () => {
+        void (async () => {
+          const discovered = await discovery.refresh();
+          universeManager.updateDiscoveredSymbols(discovered);
+          const nextCore = universeManager.getCoreSymbols();
+          if (nextCore.join(",") !== assignedSymbols.join(",")) {
+            updateWorkerSymbols(nextCore);
+          }
+        })();
+      },
+      Math.max(5_000, config.symbolDiscovery.refreshIntervalMs)
+    ).unref();
+  }
+
   const state = {
     getHealth: () => {
       const healthWorkers = [...workers.values()].map((w) => ({
@@ -125,15 +165,19 @@ async function main(): Promise<void> {
       metrics.setGauge("spread_workers_connected", [...workers.values()].filter((w) => w.connected).length);
       return metrics.renderPrometheus();
     },
-    getSymbols: () => [...config.symbols],
+    getSymbols: () => universeManager.getAllSymbols(),
+    getSymbolPools: () => ({
+      core: universeManager.getCoreSymbols(),
+      watch: universeManager.getWatchSymbols()
+    }),
+    getBasisCandidates: async (query: BasisCandidatesQuery) =>
+      basisService.listCandidates(query, {
+        core: universeManager.getCoreSymbols(),
+        watch: universeManager.getWatchSymbols()
+      }),
     updateSymbols: (symbols: string[]) => {
-      config.symbols = symbols;
-      for (const w of workers.values()) {
-        const assigned = assignSymbols(symbols, workers.size, w.workerId);
-        w.symbols = assigned;
-        w.worker.postMessage({ type: "update-config", symbols: assigned });
-      }
-      metrics.incCounter("spread_config_symbols_update_total");
+      universeManager.updateDiscoveredSymbols(symbols);
+      updateWorkerSymbols(universeManager.getCoreSymbols());
     },
     updateThresholds: (thresholds: ThresholdConfig) => {
       config.thresholds = thresholds;

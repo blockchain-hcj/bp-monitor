@@ -5,6 +5,8 @@ Low-latency monitoring service for cross-CEX long/short arbitrage references.
 ## Features
 - Binance Futures + OKX Swap top-of-book monitoring
 - Optional DeepBook top-of-book polling (via `@mysten/deepbook-v3`)
+- Automatic Binance/OKX USDT perpetual intersection discovery
+- CORE/WATCH symbol pool split with hot subscription updates
 - Dual-direction bid-ask spread calculation in bps
 - WS-first ingestion with REST snapshot recovery on sequence gap
 - Per-update event output to NATS JetStream
@@ -54,6 +56,7 @@ Where `A/B` are any enabled exchange pair for the same symbol.
   - Returns strategy points/trades/summary from current spread history data.
 - `PUT /config/symbols`
   - body: `{ "symbols": ["BTCUSDT", "ETHUSDT"] }`
+  - updates discovery universe and rebalances CORE subscriptions.
 - `PUT /config/thresholds`
   - body: `{ "minBpsAbs": 2.5 }`
 
@@ -65,3 +68,8 @@ Table `spread_events` is auto-created on startup. SQL is also available in:
 - Runtime target: Node.js 22+
 - Control plane server uses `uWebSockets.js`
 - JetStream stream is auto-created if absent
+
+## Discovery and Universe
+- `SYMBOL_DISCOVERY_ENABLED=true` enables periodic Binance+OKX intersection refresh.
+- `SYMBOL_DISCOVERY_REFRESH_MS` controls refresh cadence.
+- `CORE_MAX_SYMBOLS` caps high-frequency subscription symbols (others remain in WATCH pool).

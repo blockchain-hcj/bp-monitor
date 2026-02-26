@@ -25,6 +25,12 @@ export interface SpreadTimelineQuery {
   exchangeB?: string;
 }
 
+export interface BasisSpreadPoint {
+  tsMs: number;
+  bpsAToB: number;
+  bpsBToA: number;
+}
+
 interface SpreadRow {
   event_time: Date;
   symbol: string;
@@ -129,6 +135,37 @@ export class PostgresSpreadReadRepository {
         exchangeB: (row.exchange_b ?? "").trim()
       }))
       .filter((pair) => Boolean(pair.exchangeA) && Boolean(pair.exchangeB));
+  }
+
+  async queryRecentForSymbol(symbol: string, fromMs: number, toMs: number, limit: number): Promise<BasisSpreadPoint[]> {
+    const sql = `
+      SELECT event_time, payload
+      FROM spread_events
+      WHERE symbol = $1
+        AND event_time >= to_timestamp($2 / 1000.0)
+        AND event_time <= to_timestamp($3 / 1000.0)
+      ORDER BY event_time ASC
+      LIMIT $4
+    `;
+    const safeLimit = Math.max(1, Math.min(limit, 5_000));
+    const { rows } = await this.pool.query<{ event_time: Date; payload: Partial<SpreadEvent> | null }>(sql, [
+      symbol,
+      fromMs,
+      toMs,
+      safeLimit
+    ]);
+    return rows
+      .map((row) => {
+        const payload = row.payload ?? {};
+        const tsMs = Number(payload.ts_ingest ?? row.event_time.getTime());
+        const bpsAToB = Number(payload.bps_a_to_b);
+        const bpsBToA = Number(payload.bps_b_to_a);
+        if (!Number.isFinite(tsMs) || !Number.isFinite(bpsAToB) || !Number.isFinite(bpsBToA)) {
+          return null;
+        }
+        return { tsMs, bpsAToB, bpsBToA };
+      })
+      .filter((point): point is BasisSpreadPoint => point !== null);
   }
 
   async close(): Promise<void> {
