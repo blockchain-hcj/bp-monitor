@@ -35,6 +35,32 @@ export function renderBasisCandidatesPage(): string {
     .sub { color: var(--muted); margin-top: 5px; font-size: 13px; }
     .tag { font-family: "IBM Plex Mono", monospace; border: 1px dashed var(--line); border-radius: 999px; padding: 6px 10px; font-size: 12px; color: var(--muted); }
     .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+    .view-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      padding: 3px;
+      min-width: 300px;
+      gap: 3px;
+    }
+    .view-btn {
+      height: 42px;
+      border: none;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--muted);
+      font-family: Sora, sans-serif;
+      font-weight: 700;
+      letter-spacing: .01em;
+      cursor: pointer;
+    }
+    .view-btn.active {
+      color: #fff;
+      background: linear-gradient(95deg, #1286ea, #0eaf85);
+      box-shadow: 0 6px 16px rgba(16, 128, 166, 0.22);
+    }
     label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
     select, input, button { height: 34px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); padding: 0 10px; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
     button { border: none; cursor: pointer; color: #fff; background: linear-gradient(95deg, #1286ea, #0eaf85); font-family: Sora, sans-serif; font-weight: 700; }
@@ -59,6 +85,10 @@ export function renderBasisCandidatesPage(): string {
     </section>
 
     <section class="card controls">
+      <div class="view-switch">
+        <button class="view-btn active" id="viewAll" data-view="all">全部候选</button>
+        <button class="view-btn" id="viewRecommended" data-view="recommended">推荐 (双边低费率)</button>
+      </div>
       <label>Mode<select id="mode"><option value="all" selected>all</option><option value="stable">stable</option><option value="spike">spike</option></select></label>
       <label>Min Score<input id="minScore" type="number" min="0" max="100" value="60" /></label>
       <label>Only CORE<select id="onlyCore"><option value="false" selected>false</option><option value="true">true</option></select></label>
@@ -71,15 +101,17 @@ export function renderBasisCandidatesPage(): string {
     <section class="card table-wrap">
       <table>
         <thead>
-          <tr><th>Symbol</th><th>Pool</th><th>Direction</th><th>Net bps</th><th>Profitable</th><th>Entry->TP bps</th><th>Realized PnL</th><th>Stable Band</th><th>Arb Range</th><th>Spike</th><th>Score</th><th>Tags</th><th>Updated</th></tr>
+          <tr><th>Symbol</th><th>Pool</th><th>Direction</th><th>Net bps</th><th>Profitable</th><th>Entry->TP bps</th><th>Realized PnL</th><th>Stable Band</th><th>Arb Range</th><th>Spike</th><th>Score</th><th>Tags</th><th>Funding</th><th>Updated</th></tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="12">loading...</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="14">loading...</td></tr></tbody>
       </table>
     </section>
   </main>
   <script>
     const rows = document.getElementById("rows");
+    const viewButtons = Array.from(document.querySelectorAll(".view-btn"));
     const fmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+    let currentView = "all";
 
     function readQuery() {
       return new URLSearchParams({
@@ -88,7 +120,8 @@ export function renderBasisCandidatesPage(): string {
         onlyCore: document.getElementById("onlyCore").value,
         profitable: document.getElementById("profitable").value,
         sort: document.getElementById("sort").value,
-        limit: document.getElementById("limit").value
+        limit: document.getElementById("limit").value,
+        view: currentView
       });
     }
 
@@ -98,14 +131,65 @@ export function renderBasisCandidatesPage(): string {
       return "watch";
     }
 
+    function fmtFundingRate(value) {
+      return Number.isFinite(value) ? value.toFixed(4) + "%" : "-";
+    }
+
+    function fmtFundingIntervalHours(value) {
+      if (!Number.isFinite(value)) {
+        return "-";
+      }
+      const rounded = Math.round(value);
+      return (Math.abs(value - rounded) < 1e-6 ? rounded : value.toFixed(2)) + "h";
+    }
+
+    function formatFunding(item) {
+      const bn = item && item.binance ? item.binance : {};
+      const okx = item && item.okx ? item.okx : {};
+      const bnRate = typeof bn.ratePct === "number" ? bn.ratePct : NaN;
+      const bnInterval = typeof bn.intervalHours === "number" ? bn.intervalHours : NaN;
+      const okxRate = typeof okx.ratePct === "number" ? okx.ratePct : NaN;
+      const okxInterval = typeof okx.intervalHours === "number" ? okx.intervalHours : NaN;
+      return (
+        "Binance: " +
+        fmtFundingRate(bnRate) +
+        " / " +
+        fmtFundingIntervalHours(bnInterval) +
+        " | OKX: " +
+        fmtFundingRate(okxRate) +
+        " / " +
+        fmtFundingIntervalHours(okxInterval)
+      );
+    }
+
+    async function fetchFundingBySymbols(symbols) {
+      const normalized = [...new Set((symbols || []).map((s) => String(s || "").trim().toUpperCase()).filter(Boolean))];
+      if (normalized.length === 0) {
+        return {};
+      }
+      const q = new URLSearchParams({ symbols: normalized.join(",") });
+      const res = await fetch("/api/funding-rates?" + q.toString());
+      if (!res.ok) {
+        throw new Error("funding query failed");
+      }
+      const data = await res.json();
+      return data && data.items ? data.items : {};
+    }
+
     async function refresh() {
       const qs = readQuery();
       const res = await fetch(\`/api/basis-candidates?\${qs.toString()}\`);
       const data = await res.json();
       const items = data.items || [];
       if (items.length === 0) {
-        rows.innerHTML = \`<tr><td colspan="12">no candidates</td></tr>\`;
+        rows.innerHTML = \`<tr><td colspan="14">\${currentView === "recommended" ? "no recommended candidates" : "no candidates"}</td></tr>\`;
         return;
+      }
+      let fundingBySymbol = {};
+      try {
+        fundingBySymbol = await fetchFundingBySymbols(items.map((it) => it.symbol));
+      } catch {
+        fundingBySymbol = {};
       }
       rows.innerHTML = items.map((it) => {
         const updated = new Date(it.updatedAtMs).toLocaleTimeString();
@@ -128,12 +212,20 @@ export function renderBasisCandidatesPage(): string {
           <td class="mono">\${spike}</td>
           <td class="mono">\${it.score}</td>
           <td class="\${cls(it.tags)}">\${it.tags.join(",")}</td>
+          <td class="mono">\${formatFunding(fundingBySymbol[it.symbol])}</td>
           <td class="mono">\${updated}</td>
         </tr>\`;
       }).join("");
     }
 
     document.getElementById("refresh").addEventListener("click", refresh);
+    viewButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentView = btn.dataset.view === "recommended" ? "recommended" : "all";
+        viewButtons.forEach((item) => item.classList.toggle("active", item === btn));
+        void refresh();
+      });
+    });
     setInterval(refresh, 5000);
     void refresh();
   </script>

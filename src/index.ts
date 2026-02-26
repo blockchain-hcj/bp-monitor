@@ -5,6 +5,7 @@ import { BasisCandidatesService } from "./control/basisCandidatesService.js";
 import { BasisCandidatesQuery } from "./control/basisCandidatesService.js";
 import { startHttpServer } from "./control/httpServer.js";
 import { PostgresSpreadReadRepository } from "./control/spreadReadRepository.js";
+import { FundingRatesService } from "./control/fundingRatesService.js";
 import { SymbolDiscoveryService } from "./discovery/symbolDiscovery.js";
 import { MetricsRegistry } from "./observability/metrics.js";
 import { BasisCandidateEngine } from "./strategy/basisCandidateEngine.js";
@@ -24,18 +25,41 @@ interface WorkerState {
   error?: string;
 }
 
+function normalizeSymbols(symbols: string[]): string[] {
+  return [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
+  let preferredSymbols = normalizeSymbols(config.symbols);
   const logger = new Logger(config.logLevel, "main");
   const metrics = new MetricsRegistry();
   const spreadReadRepo = new PostgresSpreadReadRepository(config.postgresUrl);
+  const fundingRatesService = new FundingRatesService();
   const basisEngine = new BasisCandidateEngine(config.basisCandidate);
   const basisService = new BasisCandidatesService(spreadReadRepo, basisEngine, config.basisCandidate.stableWindowMs);
   const discovery = new SymbolDiscoveryService(config.symbolDiscovery, config.symbols);
   const universeManager = new UniverseManager(config.universe);
   universeManager.updateDiscoveredSymbols(await discovery.refresh());
 
-  let assignedSymbols = universeManager.getCoreSymbols();
+  const selectAssignedSymbols = (): string[] => {
+    const all = universeManager.getAllSymbols();
+    const allSet = new Set(all);
+    const preferred = preferredSymbols.filter((symbol) => allSet.has(symbol));
+    const rest = all.filter((symbol) => !preferred.includes(symbol));
+    const ranked = [...preferred, ...rest];
+    return ranked.slice(0, Math.max(1, config.universe.coreMaxSymbols));
+  };
+
+  const getSymbolPools = (): { core: string[]; watch: string[] } => {
+    const all = universeManager.getAllSymbols();
+    const core = assignedSymbols;
+    const coreSet = new Set(core);
+    const watch = all.filter((symbol) => !coreSet.has(symbol));
+    return { core, watch };
+  };
+
+  let assignedSymbols = selectAssignedSymbols();
   const desiredWorkers = Math.max(1, Math.min(config.workerCount, os.cpus().length, Math.max(1, assignedSymbols.length)));
   const workers = new Map<number, WorkerState>();
   const isTsRuntime = import.meta.url.endsWith(".ts");
@@ -106,7 +130,7 @@ async function main(): Promise<void> {
   }
 
   const updateWorkerSymbols = (symbols: string[]) => {
-    const normalized = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    const normalized = normalizeSymbols(symbols);
     const next = normalized.length > 0 ? normalized : assignedSymbols;
     assignedSymbols = next;
     config.symbols = next;
@@ -124,7 +148,7 @@ async function main(): Promise<void> {
         void (async () => {
           const discovered = await discovery.refresh();
           universeManager.updateDiscoveredSymbols(discovered);
-          const nextCore = universeManager.getCoreSymbols();
+          const nextCore = selectAssignedSymbols();
           if (nextCore.join(",") !== assignedSymbols.join(",")) {
             updateWorkerSymbols(nextCore);
           }
@@ -166,18 +190,17 @@ async function main(): Promise<void> {
       return metrics.renderPrometheus();
     },
     getSymbols: () => universeManager.getAllSymbols(),
-    getSymbolPools: () => ({
-      core: universeManager.getCoreSymbols(),
-      watch: universeManager.getWatchSymbols()
-    }),
+    getSymbolPools: () => getSymbolPools(),
     getBasisCandidates: async (query: BasisCandidatesQuery) =>
       basisService.listCandidates(query, {
-        core: universeManager.getCoreSymbols(),
-        watch: universeManager.getWatchSymbols()
+        core: getSymbolPools().core,
+        watch: getSymbolPools().watch
       }),
+    getFundingRates: async (symbols: string[]) => fundingRatesService.getBySymbols(symbols),
     updateSymbols: (symbols: string[]) => {
+      preferredSymbols = normalizeSymbols(symbols);
       universeManager.updateDiscoveredSymbols(symbols);
-      updateWorkerSymbols(universeManager.getCoreSymbols());
+      updateWorkerSymbols(selectAssignedSymbols());
     },
     updateThresholds: (thresholds: ThresholdConfig) => {
       config.thresholds = thresholds;

@@ -5,6 +5,8 @@ import { renderBasisCandidatesPage } from "./basisCandidatesPage.js";
 import { renderTimelinePage } from "./timelinePage.js";
 import { evaluateMeanReversion } from "../strategy/meanReversion.js";
 import { BasisCandidateItem, BasisCandidatesQuery } from "./basisCandidatesService.js";
+import { FundingPairInfo } from "./fundingRatesService.js";
+import { filterRecommendedCandidates } from "./recommendedCandidates.js";
 
 export interface ControlPlaneState {
   getHealth(): { ok: boolean; workers: unknown };
@@ -13,6 +15,7 @@ export interface ControlPlaneState {
   getSymbols(): string[];
   getSymbolPools(): { core: string[]; watch: string[] };
   getBasisCandidates(query: BasisCandidatesQuery): Promise<BasisCandidateItem[]>;
+  getFundingRates(symbols: string[]): Promise<Record<string, FundingPairInfo>>;
   updateSymbols(symbols: string[]): void;
   updateThresholds(thresholds: ThresholdConfig): void;
 }
@@ -132,6 +135,44 @@ export async function startHttpServer(
     }
   });
 
+  app.get("/api/funding-rates", async (res: any, req: any) => {
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    try {
+      const query = parseQuery(req);
+      const symbolsParam = (query.get("symbols") ?? "").trim();
+      const singleSymbol = (query.get("symbol") ?? "").trim();
+      const symbols = [
+        ...new Set(
+          [
+            ...symbolsParam
+              .split(",")
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean),
+            singleSymbol.toUpperCase()
+          ].filter(Boolean)
+        )
+      ];
+      if (symbols.length === 0) {
+        res.writeStatus("400 Bad Request").end("symbol or symbols is required");
+        return;
+      }
+      const items = await state.getFundingRates(symbols);
+      if (aborted) {
+        return;
+      }
+      res.writeHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ symbols, count: symbols.length, items }));
+    } catch (error) {
+      if (aborted) {
+        return;
+      }
+      res.writeStatus("500 Internal Server Error").end(error instanceof Error ? error.message : "query failed");
+    }
+  });
+
   app.get("/api/basis-candidates", async (res: any, req: any) => {
     let aborted = false;
     res.onAborted(() => {
@@ -142,14 +183,20 @@ export async function startHttpServer(
       const modeRaw = (query.get("mode") ?? "all").toLowerCase();
       const sortRaw = (query.get("sort") ?? "score").toLowerCase();
       const profitableRaw = (query.get("profitable") ?? "all").toLowerCase();
+      const viewRaw = (query.get("view") ?? "all").toLowerCase();
       const mode = modeRaw === "stable" || modeRaw === "spike" ? modeRaw : "all";
       const sort =
         sortRaw === "netbps" ? "netBps" : sortRaw === "updatedat" ? "updatedAt" : sortRaw === "entrytotp" ? "entryToTp" : "score";
       const profitable = profitableRaw === "true" || profitableRaw === "false" ? profitableRaw : "all";
+      const view = viewRaw === "recommended" ? "recommended" : "all";
       const minScore = parseBoundedNumber(query.get("minScore"), 60, 0, 100);
       const onlyCore = (query.get("onlyCore") ?? "false").toLowerCase() === "true";
       const limit = parseBoundedInt(query.get("limit"), 100, 1, 500);
-      const items = await state.getBasisCandidates({ mode, minScore, onlyCore, profitable, limit, sort });
+      const baseItems = await state.getBasisCandidates({ mode, minScore, onlyCore, profitable, limit, sort });
+      const items =
+        view === "recommended"
+          ? filterRecommendedCandidates(baseItems, await state.getFundingRates(baseItems.map((item) => item.symbol))).slice(0, limit)
+          : baseItems;
 
       if (aborted) {
         return;
@@ -163,6 +210,7 @@ export async function startHttpServer(
           profitable,
           limit,
           sort,
+          view,
           pools: state.getSymbolPools(),
           count: items.length,
           items

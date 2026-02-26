@@ -70,6 +70,12 @@ export function renderTimelinePage(): string {
       color: var(--muted);
       font-size: 14px;
     }
+    .funding {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: "IBM Plex Mono", monospace;
+    }
 
     .tag {
       font-family: "IBM Plex Mono", monospace;
@@ -254,6 +260,7 @@ export function renderTimelinePage(): string {
       <div>
         <h1 class="title">BPS Spread Timeline</h1>
         <p class="subtitle">Cross-exchange bid-ask spread in basis points along a rolling time window.</p>
+        <p class="funding" id="funding-summary">Binance: - / - | OKX: - / -</p>
       </div>
       <div class="tag" id="refresh-tag">auto refresh: 5s</div>
     </section>
@@ -325,6 +332,7 @@ export function renderTimelinePage(): string {
     const maxAbsEl = document.getElementById("max-abs");
     const countEl = document.getElementById("count");
     const tooltipEl = document.getElementById("tooltip");
+    const fundingSummaryEl = document.getElementById("funding-summary");
     let activePair = { exchangeA: "", exchangeB: "" };
 
     function titleCaseExchange(exchange) {
@@ -402,6 +410,57 @@ export function renderTimelinePage(): string {
         el.classList.add("pos");
       } else if (value < 0) {
         el.classList.add("neg");
+      }
+    }
+
+    function fmtFundingRate(value) {
+      return Number.isFinite(value) ? value.toFixed(4) + "%" : "-";
+    }
+
+    function fmtFundingIntervalHours(value) {
+      if (!Number.isFinite(value)) {
+        return "-";
+      }
+      const rounded = Math.round(value);
+      return (Math.abs(value - rounded) < 1e-6 ? rounded : value.toFixed(2)) + "h";
+    }
+
+    function fundingText(item) {
+      const bn = item && item.binance ? item.binance : {};
+      const okx = item && item.okx ? item.okx : {};
+      const bnRate = typeof bn.ratePct === "number" ? bn.ratePct : NaN;
+      const bnInterval = typeof bn.intervalHours === "number" ? bn.intervalHours : NaN;
+      const okxRate = typeof okx.ratePct === "number" ? okx.ratePct : NaN;
+      const okxInterval = typeof okx.intervalHours === "number" ? okx.intervalHours : NaN;
+      return (
+        "Binance: " +
+        fmtFundingRate(bnRate) +
+        " / " +
+        fmtFundingIntervalHours(bnInterval) +
+        " | OKX: " +
+        fmtFundingRate(okxRate) +
+        " / " +
+        fmtFundingIntervalHours(okxInterval)
+      );
+    }
+
+    async function refreshFundingSummary(symbol) {
+      const normalized = String(symbol || "").trim().toUpperCase();
+      if (!normalized) {
+        fundingSummaryEl.textContent = "Binance: - / - | OKX: - / -";
+        return;
+      }
+      try {
+        const query = new URLSearchParams({ symbol: normalized });
+        const res = await fetch("/api/funding-rates?" + query.toString());
+        if (!res.ok) {
+          throw new Error("failed funding");
+        }
+        const data = await res.json();
+        const item = data && data.items ? data.items[normalized] : null;
+        fundingSummaryEl.textContent = fundingText(item);
+      } catch {
+        fundingSummaryEl.textContent = "Binance: - / - | OKX: - / -";
       }
     }
 
@@ -887,6 +946,7 @@ export function renderTimelinePage(): string {
 
     async function refresh() {
       try {
+        await refreshFundingSummary(symbolEl.value);
         const payload = await fetchTimeline();
         const points = Array.isArray(payload.points) ? payload.points : [];
         lastPoints = points;
