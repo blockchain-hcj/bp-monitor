@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ExchangeExecutionClient, ExchangePosition, LegSide } from "../types.js";
+import { ExchangeExecutionClient, ExchangePosition, LegSide, OrderState, TimeInForce } from "../types.js";
 
 function toQuery(params: Record<string, string | number | boolean>): string {
   return Object.entries(params)
@@ -22,6 +22,9 @@ interface SymbolTradeRule {
   marketMinQty: number;
   qtyPrecision: number;
   marketQtyPrecision: number;
+  tickSizeRaw: string;
+  tickSize: number;
+  pricePrecision: number;
 }
 
 export class BinanceClient implements ExchangeExecutionClient {
@@ -42,6 +45,12 @@ export class BinanceClient implements ExchangeExecutionClient {
     this.assertCredential();
     const rules = await this.getSymbolTradeRule(symbol);
     return Number(this.quantizeQuantity(baseQty, rules, true));
+  }
+
+  async normalizeLimitPrice(symbol: string, side: LegSide, rawPrice: number): Promise<number> {
+    this.assertCredential();
+    const rules = await this.getSymbolTradeRule(symbol);
+    return Number(this.quantizePrice(rawPrice, rules, side));
   }
 
   async placeMarketIocOrder(
@@ -95,6 +104,101 @@ export class BinanceClient implements ExchangeExecutionClient {
     }
 
     throw new Error(lastErrorText || `Binance order failed: precision fallback exhausted; symbol=${symbol}`);
+  }
+
+  async placeLimitOrder(
+    symbol: string,
+    side: LegSide,
+    baseQty: number,
+    price: number,
+    reduceOnly: boolean,
+    tif: TimeInForce
+  ): Promise<{ orderId: string }> {
+    this.assertCredential();
+    const rules = await this.getSymbolTradeRule(symbol);
+    const quantity = this.quantizeQuantity(baseQty, rules, false);
+    const normalizedPrice = this.quantizePrice(price, rules, side);
+    const hedgeMode = await this.isHedgeMode();
+    const ts = Date.now();
+    const params: Record<string, string | number | boolean> = {
+      symbol,
+      side: side.toUpperCase(),
+      type: "LIMIT",
+      quantity,
+      price: normalizedPrice,
+      timeInForce: tif,
+      timestamp: ts,
+      recvWindow: 5000
+    };
+    if (hedgeMode) {
+      params.positionSide = this.inferPositionSide(side, reduceOnly);
+    } else {
+      params.reduceOnly = reduceOnly;
+    }
+    const query = toQuery(params);
+    const signature = sign(this.apiSecret!, query);
+    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
+      method: "POST",
+      headers: {
+        "X-MBX-APIKEY": this.apiKey!
+      }
+    });
+
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(
+        `Binance limit order failed: ${res.status} ${msg}; symbol=${symbol}; qty=${quantity}; price=${normalizedPrice}; side=${side}`
+      );
+    }
+    const payload = (await res.json()) as { orderId?: number };
+    return { orderId: String(payload.orderId ?? "unknown") };
+  }
+
+  async getOrderStatus(symbol: string, orderId: string): Promise<OrderState> {
+    this.assertCredential();
+    const ts = Date.now();
+    const query = toQuery({
+      symbol,
+      orderId,
+      timestamp: ts,
+      recvWindow: 5000
+    });
+    const signature = sign(this.apiSecret!, query);
+    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
+      headers: {
+        "X-MBX-APIKEY": this.apiKey!
+      }
+    });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(`Binance order status failed: ${res.status} ${msg}`);
+    }
+    const payload = (await res.json()) as { status?: string; executedQty?: string; avgPrice?: string };
+    return {
+      orderId,
+      status: this.mapBinanceStatus(payload.status),
+      filledQty: Number(payload.executedQty ?? "0"),
+      avgPrice: Number(payload.avgPrice ?? "0")
+    };
+  }
+
+  async cancelOrder(symbol: string, orderId: string): Promise<{ ok: boolean }> {
+    this.assertCredential();
+    const ts = Date.now();
+    const query = toQuery({
+      symbol,
+      orderId,
+      timestamp: ts,
+      recvWindow: 5000
+    });
+    const signature = sign(this.apiSecret!, query);
+    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
+      method: "DELETE",
+      headers: {
+        "X-MBX-APIKEY": this.apiKey!
+      }
+    });
+    return { ok: res.ok };
   }
 
   async getPosition(symbol: string): Promise<ExchangePosition> {
@@ -187,14 +291,16 @@ export class BinanceClient implements ExchangeExecutionClient {
     }
     const payload = (await res.json()) as {
       symbols?: Array<{
+        pricePrecision?: number;
         quantityPrecision?: number;
-        filters?: Array<{ filterType?: string; stepSize?: string; minQty?: string }>;
+        filters?: Array<{ filterType?: string; stepSize?: string; tickSize?: string; minQty?: string }>;
       }>;
     };
     const item = payload.symbols?.[0];
     const lot = item?.filters?.find((f) => f.filterType === "LOT_SIZE");
     const marketLot = item?.filters?.find((f) => f.filterType === "MARKET_LOT_SIZE");
-    if (!item || !lot?.stepSize || !lot.minQty) {
+    const priceFilter = item?.filters?.find((f) => f.filterType === "PRICE_FILTER");
+    if (!item || !lot?.stepSize || !lot.minQty || !priceFilter?.tickSize) {
       throw new Error(`Binance LOT_SIZE not found for ${symbol}`);
     }
     const marketStepRaw = marketLot?.stepSize ?? lot.stepSize;
@@ -213,7 +319,10 @@ export class BinanceClient implements ExchangeExecutionClient {
       marketStepSize: Number(marketStepRaw),
       marketMinQty: Number(marketMinRaw),
       qtyPrecision: Math.min(stepPrecision, quantityPrecision),
-      marketQtyPrecision: Math.min(marketStepPrecision, quantityPrecision)
+      marketQtyPrecision: Math.min(marketStepPrecision, quantityPrecision),
+      tickSizeRaw: priceFilter.tickSize,
+      tickSize: Number(priceFilter.tickSize),
+      pricePrecision: Math.max(0, item.pricePrecision ?? this.decimalsFromStepSize(priceFilter.tickSize))
     };
     this.ruleCache.set(symbol, rule);
     return rule;
@@ -235,6 +344,19 @@ export class BinanceClient implements ExchangeExecutionClient {
     const factor = 10 ** Math.max(0, decimals);
     const floored = Math.floor(value * factor) / factor;
     return floored.toFixed(Math.max(0, decimals));
+  }
+
+  private quantizePrice(rawPrice: number, rules: SymbolTradeRule, side: LegSide): string {
+    const precision = Math.max(0, rules.pricePrecision);
+    const scale = 10 ** precision;
+    const tickInt = Math.max(1, Math.round(rules.tickSize * scale));
+    const priceIntRaw = Math.max(1, Math.round(rawPrice * scale));
+    const priceInt =
+      side === "buy"
+        ? Math.ceil(priceIntRaw / tickInt) * tickInt
+        : Math.floor(priceIntRaw / tickInt) * tickInt;
+    const normalized = Math.max(tickInt, priceInt);
+    return (normalized / scale).toFixed(precision);
   }
 
   private async isHedgeMode(): Promise<boolean> {
@@ -263,5 +385,22 @@ export class BinanceClient implements ExchangeExecutionClient {
     if (!this.apiKey || !this.apiSecret) {
       throw new Error("Binance credentials are required in live mode");
     }
+  }
+
+  private mapBinanceStatus(statusRaw: string | undefined): OrderState["status"] {
+    const status = statusRaw?.toUpperCase() ?? "";
+    if (status === "FILLED") {
+      return "filled";
+    }
+    if (status === "PARTIALLY_FILLED") {
+      return "partial";
+    }
+    if (status === "CANCELED" || status === "EXPIRED") {
+      return "canceled";
+    }
+    if (status === "REJECTED") {
+      return "rejected";
+    }
+    return "new";
   }
 }

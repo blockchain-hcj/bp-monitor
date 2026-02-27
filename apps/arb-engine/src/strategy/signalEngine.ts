@@ -89,6 +89,9 @@ export class SignalEngine {
     const riskMode = this.state.getRiskMode();
 
     if (!position.isOpen) {
+      if (event.quality_flag.length > 0) {
+        return [];
+      }
       if (riskMode !== "normal") {
         return [];
       }

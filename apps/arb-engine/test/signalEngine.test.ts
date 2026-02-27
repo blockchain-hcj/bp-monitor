@@ -25,11 +25,20 @@ describe("SignalEngine", () => {
       symbol: "BTCUSDT",
       exchange_a: "binance",
       exchange_b: "okx",
+      best_bid_a: 100,
+      best_ask_a: 101,
+      best_bid_b: 102,
+      best_ask_b: 103,
+      best_bid_binance: 100,
+      best_ask_binance: 101,
+      best_bid_okx: 102,
+      best_ask_okx: 103,
       bps_a_to_b: 15,
       bps_b_to_a: 0,
       bps_binance_to_okx: 15,
       bps_okx_to_binance: 0,
       ts_ingest: Date.now(),
+      ts_publish: Date.now(),
       quality_flag: []
     });
 
@@ -48,11 +57,20 @@ describe("SignalEngine", () => {
       symbol: "BTCUSDT",
       exchange_a: "binance",
       exchange_b: "okx",
+      best_bid_a: 100,
+      best_ask_a: 101,
+      best_bid_b: 102,
+      best_ask_b: 103,
+      best_bid_binance: 100,
+      best_ask_binance: 101,
+      best_bid_okx: 102,
+      best_ask_okx: 103,
       bps_a_to_b: 7,
       bps_b_to_a: 0,
       bps_binance_to_okx: 7,
       bps_okx_to_binance: 0,
       ts_ingest: Date.now(),
+      ts_publish: Date.now(),
       quality_flag: []
     });
 
@@ -69,14 +87,49 @@ describe("SignalEngine", () => {
       symbol: "BTCUSDT",
       exchange_a: "binance",
       exchange_b: "okx",
+      best_bid_a: 100,
+      best_ask_a: 101,
+      best_bid_b: 102,
+      best_ask_b: 103,
+      best_bid_binance: 100,
+      best_ask_binance: 101,
+      best_bid_okx: 102,
+      best_ask_okx: 103,
       bps_a_to_b: 20,
       bps_b_to_a: 0,
       bps_binance_to_okx: 20,
       bps_okx_to_binance: 0,
       ts_ingest: Date.now(),
+      ts_publish: Date.now(),
       quality_flag: []
     });
 
+    expect(intents).toHaveLength(0);
+  });
+
+  it("does not open when quality flags exist", () => {
+    const store = new StateStore();
+    const engine = new SignalEngine(baseConfig, store);
+    const intents = engine.evaluate({
+      symbol: "BTCUSDT",
+      exchange_a: "binance",
+      exchange_b: "okx",
+      best_bid_a: 100,
+      best_ask_a: 101,
+      best_bid_b: 102,
+      best_ask_b: 103,
+      best_bid_binance: 100,
+      best_ask_binance: 101,
+      best_bid_okx: 102,
+      best_ask_okx: 103,
+      bps_a_to_b: 20,
+      bps_b_to_a: 0,
+      bps_binance_to_okx: 20,
+      bps_okx_to_binance: 0,
+      ts_ingest: Date.now(),
+      ts_publish: Date.now(),
+      quality_flag: ["stale"]
+    });
     expect(intents).toHaveLength(0);
   });
 });

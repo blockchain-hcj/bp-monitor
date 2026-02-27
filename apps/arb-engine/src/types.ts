@@ -4,14 +4,21 @@ export type RiskMode = "normal" | "close_only";
 export type Direction = "binance_to_okx" | "okx_to_binance";
 export type IntentAction = "open" | "close";
 export type LegSide = "buy" | "sell";
+export type TimeInForce = "GTC" | "IOC";
+export type OrderStatus = "new" | "partial" | "filled" | "canceled" | "rejected";
 
 export interface SpreadEvent {
   symbol: string;
   exchange_a: string;
   exchange_b: string;
+  best_bid_a: number;
+  best_ask_a: number;
+  best_bid_b: number;
+  best_ask_b: number;
   bps_a_to_b: number;
   bps_b_to_a: number;
   ts_ingest: number;
+  ts_publish: number;
   quality_flag: string[];
 }
 
@@ -19,11 +26,20 @@ export interface ArbInputEvent {
   symbol: string;
   exchange_a: Exchange;
   exchange_b: Exchange;
+  best_bid_a: number;
+  best_ask_a: number;
+  best_bid_b: number;
+  best_ask_b: number;
+  best_bid_binance: number;
+  best_ask_binance: number;
+  best_bid_okx: number;
+  best_ask_okx: number;
   bps_a_to_b: number;
   bps_b_to_a: number;
   bps_binance_to_okx: number;
   bps_okx_to_binance: number;
   ts_ingest: number;
+  ts_publish: number;
   quality_flag: string[];
 }
 
@@ -115,14 +131,31 @@ export interface ExecutionResultLeg {
   exchange: Exchange;
   ok: boolean;
   orderId?: string;
+  status?: OrderStatus;
+  filledQty?: number;
+  avgPrice?: number;
   error?: string;
 }
 
 export interface ExecutionResult {
   ok: boolean;
   partialFill: boolean;
+  status: OrderStatus;
+  filledQty: number;
+  avgPrice: number;
   legs: ExecutionResultLeg[];
   mode: TradeMode;
+}
+
+export interface OrderAck {
+  orderId: string;
+}
+
+export interface OrderState {
+  orderId: string;
+  status: OrderStatus;
+  filledQty: number;
+  avgPrice: number;
 }
 
 export interface ExchangePosition {
@@ -134,12 +167,23 @@ export interface ExchangePosition {
 export interface ExchangeExecutionClient {
   name(): Exchange;
   normalizeBaseQty(symbol: string, baseQty: number): Promise<number>;
+  normalizeLimitPrice(symbol: string, side: LegSide, rawPrice: number): Promise<number>;
   placeMarketIocOrder(
     symbol: string,
     side: LegSide,
     baseQty: number,
     reduceOnly: boolean
-  ): Promise<{ orderId: string }>;
+  ): Promise<OrderAck>;
+  placeLimitOrder(
+    symbol: string,
+    side: LegSide,
+    baseQty: number,
+    price: number,
+    reduceOnly: boolean,
+    tif: TimeInForce
+  ): Promise<OrderAck>;
+  getOrderStatus(symbol: string, orderId: string): Promise<OrderState>;
+  cancelOrder(symbol: string, orderId: string): Promise<{ ok: boolean }>;
   getPosition(symbol: string): Promise<ExchangePosition>;
 }
 

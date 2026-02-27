@@ -12,11 +12,20 @@ describe("RiskGuard", () => {
       symbol: "BTCUSDT",
       exchange_a: "binance",
       exchange_b: "okx",
+      best_bid_a: 100,
+      best_ask_a: 101,
+      best_bid_b: 102,
+      best_ask_b: 103,
+      best_bid_binance: 100,
+      best_ask_binance: 101,
+      best_bid_okx: 102,
+      best_ask_okx: 103,
       bps_a_to_b: 1,
       bps_b_to_a: 2,
       bps_binance_to_okx: 1,
       bps_okx_to_binance: 2,
       ts_ingest: Date.now(),
+      ts_publish: Date.now(),
       quality_flag: ["stale"]
     });
 

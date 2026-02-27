@@ -14,8 +14,20 @@ describe("PositionReconciler", () => {
           async normalizeBaseQty(_symbol: string, baseQty: number) {
             return baseQty;
           },
+          async normalizeLimitPrice(_symbol: string, _side: "buy" | "sell", rawPrice: number) {
+            return rawPrice;
+          },
           async placeMarketIocOrder() {
             return { orderId: "x" };
+          },
+          async placeLimitOrder() {
+            return { orderId: "x" };
+          },
+          async getOrderStatus(_symbol: string, orderId: string) {
+            return { orderId, status: "filled" as const, filledQty: 1, avgPrice: 1 };
+          },
+          async cancelOrder() {
+            return { ok: true };
           },
           async getPosition(symbol: string) {
             if (exchange === "binance") {

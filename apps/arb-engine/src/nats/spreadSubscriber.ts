@@ -24,24 +24,49 @@ export function normalizeSpreadEvent(payload: SpreadEvent): ArbInputEvent | null
 
   let bpsBinanceToOkx: number;
   let bpsOkxToBinance: number;
+  let bestBidBinance: number;
+  let bestAskBinance: number;
+  let bestBidOkx: number;
+  let bestAskOkx: number;
 
   if (a === "binance" && b === "okx") {
     bpsBinanceToOkx = payload.bps_a_to_b;
     bpsOkxToBinance = payload.bps_b_to_a;
+    bestBidBinance = payload.best_bid_a;
+    bestAskBinance = payload.best_ask_a;
+    bestBidOkx = payload.best_bid_b;
+    bestAskOkx = payload.best_ask_b;
   } else {
     bpsBinanceToOkx = payload.bps_b_to_a;
     bpsOkxToBinance = payload.bps_a_to_b;
+    bestBidBinance = payload.best_bid_b;
+    bestAskBinance = payload.best_ask_b;
+    bestBidOkx = payload.best_bid_a;
+    bestAskOkx = payload.best_ask_a;
+  }
+
+  if (![bestBidBinance, bestAskBinance, bestBidOkx, bestAskOkx].every((v) => Number.isFinite(v) && v > 0)) {
+    return null;
   }
 
   return {
     symbol: payload.symbol.toUpperCase(),
     exchange_a: a,
     exchange_b: b,
+    best_bid_a: payload.best_bid_a,
+    best_ask_a: payload.best_ask_a,
+    best_bid_b: payload.best_bid_b,
+    best_ask_b: payload.best_ask_b,
+    best_bid_binance: bestBidBinance,
+    best_ask_binance: bestAskBinance,
+    best_bid_okx: bestBidOkx,
+    best_ask_okx: bestAskOkx,
     bps_a_to_b: payload.bps_a_to_b,
     bps_b_to_a: payload.bps_b_to_a,
     bps_binance_to_okx: bpsBinanceToOkx,
     bps_okx_to_binance: bpsOkxToBinance,
     ts_ingest: payload.ts_ingest,
+    ts_publish: Number.isFinite(payload.ts_publish) ? payload.ts_publish : payload.ts_ingest,
     quality_flag: Array.isArray(payload.quality_flag) ? payload.quality_flag : []
   };
 }

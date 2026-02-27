@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ExchangeExecutionClient, ExchangePosition, LegSide, OrderState, TimeInForce } from "../types.js";
+import { ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
 
 function toInstId(symbol: string): string {
   const normalized = symbol.toUpperCase();
@@ -10,15 +10,19 @@ function toInstId(symbol: string): string {
   return `${base}-USDT-SWAP`;
 }
 
-export class OkxClient implements ExchangeExecutionClient {
+interface InstrumentRule {
+  ctVal: number;
+  tickSz: number;
+}
+
+export class OkxClient implements ExchangeClient {
   private readonly baseUrl = "https://www.okx.com";
-  private readonly instrumentCache = new Map<string, { ctVal: number; tickSz: number }>();
+  private readonly instrumentCache = new Map<string, InstrumentRule>();
 
   constructor(
     private readonly apiKey?: string,
     private readonly apiSecret?: string,
-    private readonly passphrase?: string,
-    private readonly ctValOverrides: Record<string, number> = {}
+    private readonly passphrase?: string
   ) {}
 
   name() {
@@ -26,63 +30,11 @@ export class OkxClient implements ExchangeExecutionClient {
   }
 
   async normalizeBaseQty(symbol: string, baseQty: number): Promise<number> {
-    this.assertCredential();
-    const instId = toInstId(symbol);
-    const ctVal = await this.getContractValue(symbol, instId);
-    const contracts = Math.floor(baseQty / ctVal);
-    if (contracts <= 0) {
-      return 0;
-    }
-    return contracts * ctVal;
-  }
-
-  async normalizeLimitPrice(symbol: string, side: LegSide, rawPrice: number): Promise<number> {
-    this.assertCredential();
     const instId = toInstId(symbol);
     const rule = await this.getInstrumentRule(symbol, instId);
-    const tickSz = Math.max(rule.tickSz, 1e-12);
-    const scale = Math.round(1 / tickSz);
-    if (!Number.isFinite(scale) || scale <= 0) {
-      return Math.max(0, rawPrice);
-    }
-    const normalized =
-      side === "buy" ? Math.ceil(rawPrice * scale) / scale : Math.floor(rawPrice * scale) / scale;
-    return Math.max(tickSz, normalized);
-  }
-
-  async placeMarketIocOrder(
-    symbol: string,
-    side: LegSide,
-    baseQty: number,
-    reduceOnly: boolean
-  ): Promise<{ orderId: string }> {
-    this.assertCredential();
-    const instId = toInstId(symbol);
-    const ctVal = await this.getContractValue(symbol, instId);
-    const contracts = Math.max(1, Math.round(baseQty / ctVal));
-
-    const body = {
-      instId,
-      tdMode: "cross",
-      side,
-      ordType: "market",
-      sz: String(contracts),
-      reduceOnly
-    };
-
-    const payload = await this.privateRequest<{ data?: Array<{ ordId?: string; sCode?: string; sMsg?: string }> }>(
-      "POST",
-      "/api/v5/trade/order",
-      body
-    );
-
-    const first = payload.data?.[0];
-    if (!first || (first.sCode && first.sCode !== "0")) {
-      throw new Error(
-        `OKX order failed: ${first?.sCode ?? "unknown"} ${first?.sMsg ?? ""}; symbol=${symbol}; baseQty=${baseQty}; ctVal=${ctVal}; sz=${contracts}`
-      );
-    }
-    return { orderId: first.ordId ?? "unknown" };
+    const contracts = Math.floor(baseQty / rule.ctVal);
+    if (contracts <= 0) return 0;
+    return contracts * rule.ctVal;
   }
 
   async placeLimitOrder(
@@ -90,14 +42,13 @@ export class OkxClient implements ExchangeExecutionClient {
     side: LegSide,
     baseQty: number,
     price: number,
-    reduceOnly: boolean,
-    _tif: TimeInForce
+    reduceOnly: boolean
   ): Promise<{ orderId: string }> {
     this.assertCredential();
     const instId = toInstId(symbol);
-    const ctVal = await this.getContractValue(symbol, instId);
-    const contracts = Math.max(1, Math.round(baseQty / ctVal));
-    const normalizedPrice = await this.normalizeLimitPrice(symbol, side, price);
+    const rule = await this.getInstrumentRule(symbol, instId);
+    const contracts = Math.max(1, Math.round(baseQty / rule.ctVal));
+    const normalizedPrice = this.quantizePriceInternal(price, rule.tickSz, side);
 
     const body = {
       instId,
@@ -106,7 +57,7 @@ export class OkxClient implements ExchangeExecutionClient {
       ordType: "limit",
       px: String(normalizedPrice),
       sz: String(contracts),
-      reduceOnly
+      reduceOnly,
     };
 
     const payload = await this.privateRequest<{ data?: Array<{ ordId?: string; sCode?: string; sMsg?: string }> }>(
@@ -117,9 +68,40 @@ export class OkxClient implements ExchangeExecutionClient {
 
     const first = payload.data?.[0];
     if (!first || (first.sCode && first.sCode !== "0")) {
-      throw new Error(
-        `OKX limit order failed: ${first?.sCode ?? "unknown"} ${first?.sMsg ?? ""}; symbol=${symbol}; baseQty=${baseQty}; px=${normalizedPrice}; sz=${contracts}`
-      );
+      throw new Error(`OKX limit order failed: ${first?.sCode ?? "unknown"} ${first?.sMsg ?? ""}; symbol=${symbol}; px=${normalizedPrice}; sz=${contracts}`);
+    }
+    return { orderId: first.ordId ?? "unknown" };
+  }
+
+  async placeMarketOrder(
+    symbol: string,
+    side: LegSide,
+    baseQty: number,
+    reduceOnly: boolean
+  ): Promise<{ orderId: string }> {
+    this.assertCredential();
+    const instId = toInstId(symbol);
+    const rule = await this.getInstrumentRule(symbol, instId);
+    const contracts = Math.max(1, Math.round(baseQty / rule.ctVal));
+
+    const body = {
+      instId,
+      tdMode: "cross",
+      side,
+      ordType: "market",
+      sz: String(contracts),
+      reduceOnly,
+    };
+
+    const payload = await this.privateRequest<{ data?: Array<{ ordId?: string; sCode?: string; sMsg?: string }> }>(
+      "POST",
+      "/api/v5/trade/order",
+      body
+    );
+
+    const first = payload.data?.[0];
+    if (!first || (first.sCode && first.sCode !== "0")) {
+      throw new Error(`OKX market order failed: ${first?.sCode ?? "unknown"} ${first?.sMsg ?? ""}; symbol=${symbol}; sz=${contracts}`);
     }
     return { orderId: first.ordId ?? "unknown" };
   }
@@ -128,7 +110,7 @@ export class OkxClient implements ExchangeExecutionClient {
     this.assertCredential();
     const instId = toInstId(symbol);
     const payload = await this.privateRequest<{
-      data?: Array<{ state?: string; fillSz?: string; fillPx?: string; avgPx?: string }>;
+      data?: Array<{ state?: string; fillSz?: string; avgPx?: string; fillPx?: string }>;
     }>("GET", `/api/v5/trade/order?instId=${instId}&ordId=${encodeURIComponent(orderId)}`);
 
     const first = payload.data?.[0];
@@ -137,9 +119,9 @@ export class OkxClient implements ExchangeExecutionClient {
     }
     return {
       orderId,
-      status: this.mapOkxStatus(first.state),
+      status: this.mapStatus(first.state),
       filledQty: Number(first.fillSz ?? "0"),
-      avgPrice: Number(first.avgPx ?? first.fillPx ?? "0")
+      avgPrice: Number(first.avgPx ?? first.fillPx ?? "0"),
     };
   }
 
@@ -148,10 +130,22 @@ export class OkxClient implements ExchangeExecutionClient {
     const instId = toInstId(symbol);
     const payload = await this.privateRequest<{ data?: Array<{ sCode?: string }> }>("POST", "/api/v5/trade/cancel-order", {
       instId,
-      ordId: orderId
+      ordId: orderId,
     });
     const code = payload.data?.[0]?.sCode;
     return { ok: !code || code === "0" };
+  }
+
+  async getTickSize(symbol: string): Promise<number> {
+    const instId = toInstId(symbol);
+    const rule = await this.getInstrumentRule(symbol, instId);
+    return rule.tickSz;
+  }
+
+  async quantizePrice(price: number, symbol: string, side: LegSide): Promise<number> {
+    const instId = toInstId(symbol);
+    const rule = await this.getInstrumentRule(symbol, instId);
+    return this.quantizePriceInternal(price, rule.tickSz, side);
   }
 
   async getPosition(symbol: string): Promise<ExchangePosition> {
@@ -172,50 +166,37 @@ export class OkxClient implements ExchangeExecutionClient {
     for (const row of rows) {
       const pos = Number(row.pos ?? "0");
       const notional = Math.abs(Number(row.notionalUsd ?? "0"));
-      if (!Number.isFinite(notional) || notional <= 0) {
-        continue;
-      }
-      if (pos > 0) {
-        longNotionalUsdt += notional;
-      } else if (pos < 0) {
-        shortNotionalUsdt += notional;
-      }
+      if (!Number.isFinite(notional) || notional <= 0) continue;
+      if (pos > 0) longNotionalUsdt += notional;
+      else if (pos < 0) shortNotionalUsdt += notional;
     }
     return { symbol, longNotionalUsdt, shortNotionalUsdt };
   }
 
-  private async getLastPrice(instId: string): Promise<number> {
-    const res = await fetch(`${this.baseUrl}/api/v5/market/ticker?instId=${instId}`);
-    if (!res.ok) {
-      throw new Error(`OKX ticker failed: ${res.status}`);
+  private quantizePriceInternal(rawPrice: number, tickSz: number, side: LegSide): number {
+    const tick = Math.max(tickSz, 1e-12);
+    const scale = Math.round(1 / tick);
+    if (!Number.isFinite(scale) || scale <= 0) {
+      return Math.max(0, rawPrice);
     }
-    const payload = (await res.json()) as { data?: Array<{ last: string }> };
-    const last = Number(payload.data?.[0]?.last ?? "0");
-    if (!Number.isFinite(last) || last <= 0) {
-      throw new Error(`Invalid OKX last price for ${instId}`);
-    }
-    return last;
+    const normalized =
+      side === "buy"
+        ? Math.ceil(rawPrice * scale) / scale
+        : Math.floor(rawPrice * scale) / scale;
+    return Math.max(tick, normalized);
   }
 
-  private async getContractValue(symbol: string, instId: string): Promise<number> {
-    const rule = await this.getInstrumentRule(symbol, instId);
-    return rule.ctVal;
-  }
-
-  private async getInstrumentRule(symbol: string, instId: string): Promise<{ ctVal: number; tickSz: number }> {
+  private async getInstrumentRule(symbol: string, instId: string): Promise<InstrumentRule> {
     const cached = this.instrumentCache.get(instId);
-    if (cached) {
-      return cached;
-    }
-    const override = this.ctValOverrides[symbol.toUpperCase()];
+    if (cached) return cached;
+
     const res = await fetch(`${this.baseUrl}/api/v5/public/instruments?instType=SWAP&instId=${instId}`);
-    if (!res.ok) {
-      throw new Error(`OKX instruments failed: ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`OKX instruments failed: ${res.status}`);
+
     const payload = (await res.json()) as { data?: Array<{ ctVal: string; tickSz?: string }> };
     const ctVal = Number(payload.data?.[0]?.ctVal ?? "0");
     const tickSz = Number(payload.data?.[0]?.tickSz ?? "0");
-    const normalizedCtVal = Number.isFinite(override) && override > 0 ? override : ctVal;
+    const normalizedCtVal = Number.isFinite(ctVal) && ctVal > 0 ? ctVal : 0;
     const normalizedTick = Number.isFinite(tickSz) && tickSz > 0 ? tickSz : 0.1;
     if (!Number.isFinite(normalizedCtVal) || normalizedCtVal <= 0) {
       throw new Error(`Invalid ctVal for ${instId}`);
@@ -238,9 +219,9 @@ export class OkxClient implements ExchangeExecutionClient {
         "OK-ACCESS-KEY": this.apiKey!,
         "OK-ACCESS-SIGN": signature,
         "OK-ACCESS-TIMESTAMP": ts,
-        "OK-ACCESS-PASSPHRASE": this.passphrase!
+        "OK-ACCESS-PASSPHRASE": this.passphrase!,
       },
-      body: bodyText || undefined
+      body: bodyText || undefined,
     });
 
     if (!res.ok) {
@@ -256,20 +237,12 @@ export class OkxClient implements ExchangeExecutionClient {
     }
   }
 
-  private mapOkxStatus(stateRaw: string | undefined): OrderState["status"] {
-    const state = (stateRaw ?? "").toLowerCase();
-    if (state === "filled") {
-      return "filled";
-    }
-    if (state === "partially_filled") {
-      return "partial";
-    }
-    if (state === "canceled" || state === "mmp_canceled") {
-      return "canceled";
-    }
-    if (state === "rejected") {
-      return "rejected";
-    }
+  private mapStatus(stateRaw: string | undefined): OrderState["status"] {
+    const s = (stateRaw ?? "").toLowerCase();
+    if (s === "filled") return "filled";
+    if (s === "partially_filled") return "partial";
+    if (s === "canceled" || s === "mmp_canceled") return "canceled";
+    if (s === "rejected") return "rejected";
     return "new";
   }
 }
