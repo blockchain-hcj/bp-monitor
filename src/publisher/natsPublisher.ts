@@ -50,4 +50,12 @@ export class NatsEventPublisher implements EventPublisher {
     this.nc = null;
     this.js = null;
   }
+
+  publishSpreadFire(event: SpreadEvent): void {
+    if (!this.nc) {
+      throw new Error("NATS publisher not initialized");
+    }
+    const subject = `${this.config.natsSubjectPrefix}.binance_okx.${event.symbol}`;
+    this.nc.publish(subject, Buffer.from(JSON.stringify(event)));
+  }
 }

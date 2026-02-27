@@ -39,6 +39,7 @@ class MonitorWorkerService {
   private readonly deepbook: DeepbookConnector;
   private readonly connectors: Record<Exchange, ExchangeConnector>;
   private readonly limiter = new TaskLimiter(2000);
+  private readonly dbLimiter = new TaskLimiter(500);
   private symbols: string[];
   private thresholds: RuntimeConfig["thresholds"];
   private running = false;
@@ -152,12 +153,12 @@ class MonitorWorkerService {
     for (let i = 0; i < tops.length - 1; i += 1) {
       for (let j = i + 1; j < tops.length; j += 1) {
         const event = this.calc.compute(tops[i], tops[j]);
-        await this.pipelineEvent(event);
+        this.pipelineEvent(event);
       }
     }
   }
 
-  private async pipelineEvent(event: SpreadEvent): Promise<void> {
+  private pipelineEvent(event: SpreadEvent): void {
     const minBpsAbs = Math.max(0, this.thresholds.minBpsAbs);
     if (Math.abs(event.bps_a_to_b) < minBpsAbs && Math.abs(event.bps_b_to_a) < minBpsAbs) {
       return;
@@ -167,39 +168,57 @@ class MonitorWorkerService {
     if (!dbPersistPlan.persist) {
       this.metrics.incCounter("spread_db_sampled_drop_total");
     }
-    const accepted = this.limiter.tryRun(async () => {
-      const start = Date.now();
-      try {
-        const dbInsertPromise = dbPersistPlan.persist ? this.repo.insert(event) : Promise.resolve();
-        await Promise.all([this.publisher.publishSpread(event), dbInsertPromise]);
-        this.lastEventAtMs = Date.now();
-        this.metrics.incCounter("spread_event_published_total");
-        this.metrics.observe("spread_e2e_latency_ms", this.lastEventAtMs - event.ts_ingest);
-      } catch (error) {
-        if (dbPersistPlan.persist && dbPersistPlan.bucket !== null && dbPersistPlan.key) {
+
+    // 1. NATS publish — fire-and-forget, not gated by any limiter
+    try {
+      if (this.publisher.publishSpreadFire) {
+        this.publisher.publishSpreadFire(event);
+      } else {
+        void this.publisher.publishSpread(event);
+      }
+      this.lastEventAtMs = Date.now();
+      this.metrics.incCounter("spread_event_published_total");
+      this.metrics.observe("spread_e2e_latency_ms", this.lastEventAtMs - event.ts_ingest);
+    } catch (error) {
+      this.metrics.incCounter("spread_event_publish_error_total");
+      this.logger.error("nats publish failed", {
+        symbol: event.symbol,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    // 2. DB insert — independently gated by dbLimiter, failure does not affect NATS
+    if (dbPersistPlan.persist) {
+      const accepted = this.dbLimiter.tryRun(async () => {
+        const start = Date.now();
+        try {
+          await this.repo.insert(event);
+        } catch (error) {
+          if (dbPersistPlan.bucket !== null && dbPersistPlan.key) {
+            const currentBucket = this.persistedDbBucketByPair.get(dbPersistPlan.key);
+            if (currentBucket === dbPersistPlan.bucket) {
+              this.persistedDbBucketByPair.delete(dbPersistPlan.key);
+            }
+          }
+          this.metrics.incCounter("spread_db_insert_error_total");
+          this.logger.error("db insert failed", {
+            symbol: event.symbol,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        } finally {
+          this.metrics.observe("spread_pipeline_duration_ms", Date.now() - start);
+        }
+      });
+
+      if (!accepted) {
+        if (dbPersistPlan.bucket !== null && dbPersistPlan.key) {
           const currentBucket = this.persistedDbBucketByPair.get(dbPersistPlan.key);
           if (currentBucket === dbPersistPlan.bucket) {
             this.persistedDbBucketByPair.delete(dbPersistPlan.key);
           }
         }
-        this.metrics.incCounter("spread_event_publish_error_total");
-        this.logger.error("event pipeline failed", {
-          symbol: event.symbol,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      } finally {
-        this.metrics.observe("spread_pipeline_duration_ms", Date.now() - start);
+        this.metrics.incCounter("spread_db_backpressure_drop_total");
       }
-    });
-
-    if (!accepted) {
-      if (dbPersistPlan.persist && dbPersistPlan.bucket !== null && dbPersistPlan.key) {
-        const currentBucket = this.persistedDbBucketByPair.get(dbPersistPlan.key);
-        if (currentBucket === dbPersistPlan.bucket) {
-          this.persistedDbBucketByPair.delete(dbPersistPlan.key);
-        }
-      }
-      this.metrics.incCounter("spread_backpressure_drop_total");
     }
   }
 
@@ -303,6 +322,8 @@ class MonitorWorkerService {
 
     const inflight = this.limiter.inflight();
     this.emit({ type: "metric", workerId: this.workerId, metric: "spread_worker_inflight", value: inflight });
+    const dbInflight = this.dbLimiter.inflight();
+    this.emit({ type: "metric", workerId: this.workerId, metric: "spread_worker_db_inflight", value: dbInflight });
   }
 
   metricsSnapshot(): string {

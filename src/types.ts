@@ -82,6 +82,7 @@ export interface PublishAck {
 
 export interface EventPublisher {
   publishSpread(event: SpreadEvent): Promise<PublishAck>;
+  publishSpreadFire?(event: SpreadEvent): void;
   close(): Promise<void>;
 }
 
