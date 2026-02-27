@@ -71,6 +71,25 @@ function parseQuery(req: any): URLSearchParams {
   return new URLSearchParams(query);
 }
 
+async function computeMaxBps1hBySymbol(
+  spreadReadRepo: PostgresSpreadReadRepository,
+  symbols: string[]
+): Promise<Record<string, number>> {
+  const nowMs = Date.now();
+  const fromMs = nowMs - 60 * 60_000;
+  const entries = await Promise.all(
+    symbols.map(async (symbol) => {
+      const points = await spreadReadRepo.queryRecentForSymbol(symbol, fromMs, nowMs, 1200);
+      let maxBps = Number.NEGATIVE_INFINITY;
+      for (const point of points) {
+        maxBps = Math.max(maxBps, point.bpsAToB, point.bpsBToA);
+      }
+      return [symbol, maxBps] as const;
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
 export async function startHttpServer(
   port: number,
   state: ControlPlaneState,
@@ -193,10 +212,20 @@ export async function startHttpServer(
       const onlyCore = (query.get("onlyCore") ?? "false").toLowerCase() === "true";
       const limit = parseBoundedInt(query.get("limit"), 100, 1, 500);
       const baseItems = await state.getBasisCandidates({ mode, minScore, onlyCore, profitable, limit, sort });
-      const items =
-        view === "recommended"
-          ? filterRecommendedCandidates(baseItems, await state.getFundingRates(baseItems.map((item) => item.symbol))).slice(0, limit)
-          : baseItems;
+      let items: Array<BasisCandidateItem & { maxBps1h?: number }> = baseItems;
+      if (view === "recommended") {
+        const maxBps1hBySymbol = await computeMaxBps1hBySymbol(spreadReadRepo, baseItems.map((item) => item.symbol));
+        items = filterRecommendedCandidates(
+          baseItems,
+          await state.getFundingRates(baseItems.map((item) => item.symbol)),
+          maxBps1hBySymbol
+        )
+          .slice(0, limit)
+          .map((item) => ({
+            ...item,
+            maxBps1h: maxBps1hBySymbol[item.symbol]
+          }));
+      }
 
       if (aborted) {
         return;

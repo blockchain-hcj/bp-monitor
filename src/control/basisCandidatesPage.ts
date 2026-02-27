@@ -101,9 +101,9 @@ export function renderBasisCandidatesPage(): string {
     <section class="card table-wrap">
       <table>
         <thead>
-          <tr><th>Symbol</th><th>Pool</th><th>Direction</th><th>Net bps</th><th>Profitable</th><th>Entry->TP bps</th><th>Realized PnL</th><th>Stable Band</th><th>Arb Range</th><th>Spike</th><th>Score</th><th>Tags</th><th>Funding</th><th>Updated</th></tr>
+          <tr><th>Symbol</th><th>Pool</th><th>Direction</th><th>Net bps</th><th>1h Max bps</th><th>Profitable</th><th>Entry->TP bps</th><th>Realized PnL</th><th>Stable Band</th><th>Arb Range</th><th>Spike</th><th>Score</th><th>Tags</th><th>Funding</th><th>Updated</th></tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="14">loading...</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="15">loading...</td></tr></tbody>
       </table>
     </section>
   </main>
@@ -182,7 +182,7 @@ export function renderBasisCandidatesPage(): string {
       const data = await res.json();
       const items = data.items || [];
       if (items.length === 0) {
-        rows.innerHTML = \`<tr><td colspan="14">\${currentView === "recommended" ? "no recommended candidates" : "no candidates"}</td></tr>\`;
+        rows.innerHTML = \`<tr><td colspan="15">\${currentView === "recommended" ? "no recommended candidates" : "no candidates"}</td></tr>\`;
         return;
       }
       let fundingBySymbol = {};
@@ -204,6 +204,7 @@ export function renderBasisCandidatesPage(): string {
           <td>\${it.pool}</td>
           <td>\${it.bestDirection}</td>
           <td class="mono">\${fmt.format(it.netBps)}</td>
+          <td class="mono">\${Number.isFinite(it.maxBps1h) ? fmt.format(it.maxBps1h) : "-"}</td>
           <td class="mono">\${it.profitableNow ? "true" : "false"}</td>
           <td class="mono">\${fmt.format(it.entryToTakeProfitBps)}</td>
           <td class="mono">\${realized}</td>

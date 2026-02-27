@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { filterRecommendedCandidates } from "../src/control/recommendedCandidates.js";
 
 describe("filterRecommendedCandidates", () => {
-  test("keeps only symbols where both exchanges satisfy funding constraints and sorts by netBps desc", () => {
+  test("keeps only symbols where both exchanges satisfy funding constraints and sorts by 1h max bps desc", () => {
     const items = [
       { symbol: "A", netBps: -12 },
       { symbol: "B", netBps: 7 },
@@ -39,8 +39,16 @@ describe("filterRecommendedCandidates", () => {
       }
     };
 
-    const out = filterRecommendedCandidates(items as any, fundingBySymbol as any);
-    expect(out.map((it) => it.symbol)).toEqual(["D", "E", "A"]);
+    const out = filterRecommendedCandidates(
+      items as any,
+      fundingBySymbol as any,
+      {
+        A: 30,
+        D: 5,
+        E: 10
+      }
+    );
+    expect(out.map((it) => it.symbol)).toEqual(["A", "E", "D"]);
   });
 
   test("returns empty when funding is missing or invalid", () => {

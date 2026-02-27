@@ -30,15 +30,26 @@ Where `A/B` are any enabled exchange pair for the same symbol.
   - `DEEPBOOK_POOL_MAP=SUIUSDT:SUI_USDC` (format: `SYMBOL:POOL_KEY`, comma separated)
 
 ## Quick Start
-1. Start dependencies:
-   - `docker compose up -d`
-2. Install dependencies:
-   - `npm install`
-3. Configure env:
+1. Configure env files:
    - `cp .env.example .env`
-4. Start:
-   - `   `
-   - (This runs `build + dist` startup to keep worker_threads stable.)
+   - `cp apps/arb-engine/.env.example apps/arb-engine/.env`
+2. Build and start all services (NATS + Postgres + monitor + arb-engine):
+   - `docker compose up -d --build`
+3. Check status:
+   - `docker compose ps`
+4. Check health:
+   - `curl http://127.0.0.1:18081/healthz`
+   - `curl http://127.0.0.1:18180/healthz`
+
+## Docker Notes
+- In Docker Compose, service DNS names are used automatically:
+  - `NATS_URL` is forced to `nats://nats:4222`
+  - `POSTGRES_URL` is forced to `postgres://postgres:postgres@postgres:5432/monitors`
+- Host ports:
+  - `18081` => monitor control plane
+  - `18180` => arb-engine control plane
+  - `4222/8222` => NATS
+  - `5432` => PostgreSQL
 
 ## Control Plane
 - `GET /healthz`

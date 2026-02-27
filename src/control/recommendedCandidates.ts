@@ -24,9 +24,20 @@ export function isRecommendedFundingPair(pair: FundingPairInfo | undefined): boo
 
 export function filterRecommendedCandidates(
   items: BasisCandidateItem[],
-  fundingBySymbol: Record<string, FundingPairInfo>
+  fundingBySymbol: Record<string, FundingPairInfo>,
+  maxBps1hBySymbol?: Record<string, number>
 ): BasisCandidateItem[] {
+  const scoreOf = (symbol: string): number => {
+    const value = maxBps1hBySymbol?.[symbol];
+    return Number.isFinite(value) ? Number(value) : Number.NEGATIVE_INFINITY;
+  };
   return [...items]
     .filter((item) => isRecommendedFundingPair(fundingBySymbol[item.symbol]))
-    .sort((a, b) => b.netBps - a.netBps);
+    .sort((a, b) => {
+      const diff = scoreOf(b.symbol) - scoreOf(a.symbol);
+      if (diff !== 0) {
+        return diff;
+      }
+      return b.netBps - a.netBps;
+    });
 }
