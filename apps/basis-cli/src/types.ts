@@ -88,6 +88,7 @@ export interface CliConfig {
   okxApiPassphrase?: string;
   bnApiKey?: string;
   bnApiSecret?: string;
+  bnHedgeMode: "auto" | "hedge" | "oneway";
   feeBps: number;
 }
 

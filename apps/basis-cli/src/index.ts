@@ -29,7 +29,9 @@ async function main() {
     if (!config.okxApiKey || !config.okxApiSecret || !config.okxApiPassphrase) {
       throw new Error("Live mode requires OKX_API_KEY, OKX_API_SECRET, and OKX_API_PASSPHRASE");
     }
-    binanceClient = new BinanceClient(config.bnApiKey, config.bnApiSecret);
+    const hedgeModeOverride =
+      config.bnHedgeMode === "hedge" ? true : config.bnHedgeMode === "oneway" ? false : null;
+    binanceClient = new BinanceClient(config.bnApiKey, config.bnApiSecret, hedgeModeOverride);
     okxClient = new OkxClient(config.okxApiKey, config.okxApiSecret, config.okxApiPassphrase);
   }
 

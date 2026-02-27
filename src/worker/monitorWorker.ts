@@ -20,6 +20,8 @@ import {
 import { Logger } from "../utils/logger.js";
 import { TaskLimiter } from "../utils/taskLimiter.js";
 
+const MAX_PUBLISH_PER_SEC_PER_PAIR = 5;
+
 interface WorkerData {
   workerId: number;
   symbols: string[];
@@ -48,6 +50,7 @@ class MonitorWorkerService {
   private readonly snapshotInFlight = new Set<string>();
   private readonly persistedDbBucketByPair = new Map<string, number>();
   private readonly lastPublishedSignatureByPair = new Map<string, string>();
+  private readonly publishWindowByPair = new Map<string, { sec: number; count: number }>();
   private retentionCleanupInFlight = false;
 
   constructor(params: WorkerData) {
@@ -174,6 +177,18 @@ class MonitorWorkerService {
     }
     this.lastPublishedSignatureByPair.set(pairKey, signature);
 
+    const sec = Math.floor(Date.now() / 1000);
+    const window = this.publishWindowByPair.get(pairKey);
+    if (!window || window.sec !== sec) {
+      this.publishWindowByPair.set(pairKey, { sec, count: 1 });
+    } else {
+      if (window.count >= MAX_PUBLISH_PER_SEC_PER_PAIR) {
+        this.metrics.incCounter("spread_publish_rate_limit_drop_total");
+        return;
+      }
+      window.count += 1;
+    }
+
     event.ts_publish = Date.now();
     const dbPersistPlan = this.planDbPersist(event);
     if (!dbPersistPlan.persist) {
@@ -261,6 +276,12 @@ class MonitorWorkerService {
       const symbol = key.split(":")[0];
       if (!activeSymbols.has(symbol)) {
         this.lastPublishedSignatureByPair.delete(key);
+      }
+    }
+    for (const key of this.publishWindowByPair.keys()) {
+      const symbol = key.split(":")[0];
+      if (!activeSymbols.has(symbol)) {
+        this.publishWindowByPair.delete(key);
       }
     }
   }

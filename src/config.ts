@@ -106,6 +106,7 @@ export function loadConfig(): RuntimeConfig {
     postgresUrl: process.env.POSTGRES_URL ?? "postgres://postgres:postgres@127.0.0.1:5432/monitors",
     publishTimeoutMs: parseIntEnv("PUBLISH_TIMEOUT_MS", 200),
     publishRetries: parseIntEnv("PUBLISH_RETRIES", 2),
+    publishMaxPerSecPerPair: parseIntEnv("PUBLISH_MAX_PER_SEC_PER_PAIR", 5),
     dbInsertTimeoutMs: parseIntEnv("DB_INSERT_TIMEOUT_MS", 300),
     dbSampleIntervalMs: parseIntEnv("DB_SAMPLE_INTERVAL_MS", 1_000),
     dbRetentionDays: parseIntEnv("DB_RETENTION_DAYS", 7),

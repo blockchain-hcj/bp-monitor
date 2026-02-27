@@ -9,6 +9,7 @@ import {
 } from "../types.js";
 import { LimitOrderPricer } from "../pricing/limitOrderPricer.js";
 import { PriceFeed } from "../pricing/priceFeed.js";
+import { formatErrorDetails } from "../execution/errorFormat.js";
 
 const POLL_INTERVAL_MS = 500;
 const SINGLE_LEG_FILL_GRACE_MS = 10_000;
@@ -169,8 +170,8 @@ export class OrderManager {
 
       this.startPolling();
       this.startTimeout();
-    } catch (err: any) {
-      this.log(`Execute error: ${err.message}`);
+    } catch (err: unknown) {
+      this.log(`Execute error: ${formatErrorDetails(err)}`);
       this.state.phase = "IDLE";
       this.emit();
     }
@@ -262,8 +263,8 @@ export class OrderManager {
       await client.cancelOrder(symbol, leg.orderId);
       leg.status = "canceled";
       this.log(`Cancelled ${leg.exchange.toUpperCase()} #${leg.orderId}`);
-    } catch (err: any) {
-      this.log(`Cancel ${leg.exchange.toUpperCase()} failed: ${err.message}`);
+    } catch (err: unknown) {
+      this.log(`Cancel ${leg.exchange.toUpperCase()} failed: ${formatErrorDetails(err)}`);
     }
   }
 

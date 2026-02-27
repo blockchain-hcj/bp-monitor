@@ -10,7 +10,8 @@
     "start": "node --env-file-if-exists=.env --enable-source-maps dist/index.js",
     "dev": "node --env-file-if-exists=.env --import tsx/esm src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "probe": "node --env-file-if-exists=.env --import tsx/esm src/tools/symbolProbe.ts"
+    "probe": "node --env-file-if-exists=.env --import tsx/esm src/tools/symbolProbe.ts",
+    "probe:bn-order": "node --env-file-if-exists=.env --import tsx/esm src/tools/bnOrderProbe.ts"
   },
   "dependencies": {
     "nats": "^2.29.3"

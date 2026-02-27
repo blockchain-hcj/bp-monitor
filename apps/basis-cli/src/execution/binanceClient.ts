@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
+import { fetchWithContext } from "./errorFormat.js";
 
 function toQuery(params: Record<string, string | number | boolean>): string {
   return Object.entries(params)
@@ -26,7 +27,8 @@ export class BinanceClient implements ExchangeClient {
 
   constructor(
     private readonly apiKey?: string,
-    private readonly apiSecret?: string
+    private readonly apiSecret?: string,
+    private readonly hedgeModeOverride: boolean | null = null
   ) {}
 
   name() {
@@ -79,10 +81,14 @@ export class BinanceClient implements ExchangeClient {
 
     const query = toQuery(params);
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
-      method: "POST",
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`,
+      {
+        method: "POST",
+        headers: { "X-MBX-APIKEY": this.apiKey! },
+      },
+      `POST /fapi/v1/order LIMIT symbol=${symbol}`
+    );
 
     if (!res.ok) {
       const msg = await res.text();
@@ -120,10 +126,14 @@ export class BinanceClient implements ExchangeClient {
 
     const query = toQuery(params);
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
-      method: "POST",
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`,
+      {
+        method: "POST",
+        headers: { "X-MBX-APIKEY": this.apiKey! },
+      },
+      `POST /fapi/v1/order MARKET symbol=${symbol}`
+    );
 
     if (!res.ok) {
       const msg = await res.text();
@@ -138,9 +148,11 @@ export class BinanceClient implements ExchangeClient {
     const ts = Date.now();
     const query = toQuery({ symbol, orderId, timestamp: ts, recvWindow: 5000 });
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`,
+      { headers: { "X-MBX-APIKEY": this.apiKey! } },
+      `GET /fapi/v1/order status symbol=${symbol} orderId=${orderId}`
+    );
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(`Binance order status failed: ${res.status} ${msg}`);
@@ -159,10 +171,14 @@ export class BinanceClient implements ExchangeClient {
     const ts = Date.now();
     const query = toQuery({ symbol, orderId, timestamp: ts, recvWindow: 5000 });
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`, {
-      method: "DELETE",
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/order?${query}&signature=${signature}`,
+      {
+        method: "DELETE",
+        headers: { "X-MBX-APIKEY": this.apiKey! },
+      },
+      `DELETE /fapi/v1/order symbol=${symbol} orderId=${orderId}`
+    );
     return { ok: res.ok };
   }
 
@@ -181,9 +197,11 @@ export class BinanceClient implements ExchangeClient {
     const ts = Date.now();
     const query = toQuery({ timestamp: ts, recvWindow: 5000 });
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v2/positionRisk?${query}&signature=${signature}`, {
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v2/positionRisk?${query}&signature=${signature}`,
+      { headers: { "X-MBX-APIKEY": this.apiKey! } },
+      `GET /fapi/v2/positionRisk symbol=${symbol}`
+    );
 
     if (!res.ok) {
       const msg = await res.text();
@@ -239,7 +257,11 @@ export class BinanceClient implements ExchangeClient {
     const cached = this.ruleCache.get(symbol);
     if (cached) return cached;
 
-    const res = await fetch(`${this.baseUrl}/fapi/v1/exchangeInfo?symbol=${symbol}`);
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/exchangeInfo?symbol=${symbol}`,
+      undefined,
+      `GET /fapi/v1/exchangeInfo symbol=${symbol}`
+    );
     if (!res.ok) throw new Error(`Binance exchangeInfo failed: ${res.status}`);
 
     const payload = (await res.json()) as {
@@ -275,14 +297,25 @@ export class BinanceClient implements ExchangeClient {
   }
 
   private async isHedgeMode(): Promise<boolean> {
+    if (this.hedgeModeOverride !== null) {
+      this.hedgeMode = this.hedgeModeOverride;
+      return this.hedgeMode;
+    }
     if (this.hedgeMode !== null) return this.hedgeMode;
     const ts = Date.now();
     const query = toQuery({ timestamp: ts, recvWindow: 5000 });
     const signature = sign(this.apiSecret!, query);
-    const res = await fetch(`${this.baseUrl}/fapi/v1/positionSide/dual?${query}&signature=${signature}`, {
-      headers: { "X-MBX-APIKEY": this.apiKey! },
-    });
-    if (!res.ok) throw new Error(`Binance hedge mode query failed: ${res.status}`);
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/positionSide/dual?${query}&signature=${signature}`,
+      { headers: { "X-MBX-APIKEY": this.apiKey! } },
+      "GET /fapi/v1/positionSide/dual"
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `Binance hedge mode query failed: ${res.status} ${body}; tip=check server clock sync, futures API permission, and IP whitelist`
+      );
+    }
     const payload = (await res.json()) as { dualSidePosition?: boolean | string };
     this.hedgeMode = payload.dualSidePosition === true || payload.dualSidePosition === "true";
     return this.hedgeMode;
@@ -297,6 +330,10 @@ export class BinanceClient implements ExchangeClient {
     if (!this.apiKey || !this.apiSecret) {
       throw new Error("Binance credentials are required in live mode");
     }
+  }
+
+  private fetchBinance(url: string, init: RequestInit | undefined, context: string): Promise<Response> {
+    return fetchWithContext(url, init, `Binance ${context}`);
   }
 
   private mapStatus(statusRaw: string | undefined): OrderState["status"] {

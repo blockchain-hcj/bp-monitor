@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
+import { fetchWithContext } from "./errorFormat.js";
 
 function toInstId(symbol: string): string {
   const normalized = symbol.toUpperCase();
@@ -190,7 +191,11 @@ export class OkxClient implements ExchangeClient {
     const cached = this.instrumentCache.get(instId);
     if (cached) return cached;
 
-    const res = await fetch(`${this.baseUrl}/api/v5/public/instruments?instType=SWAP&instId=${instId}`);
+    const res = await this.fetchOkx(
+      `${this.baseUrl}/api/v5/public/instruments?instType=SWAP&instId=${instId}`,
+      undefined,
+      `GET /api/v5/public/instruments instId=${instId}`
+    );
     if (!res.ok) throw new Error(`OKX instruments failed: ${res.status}`);
 
     const payload = (await res.json()) as { data?: Array<{ ctVal: string; tickSz?: string }> };
@@ -212,17 +217,21 @@ export class OkxClient implements ExchangeClient {
     const prehash = `${ts}${method}${pathWithQuery}${bodyText}`;
     const signature = crypto.createHmac("sha256", this.apiSecret!).update(prehash).digest("base64");
 
-    const res = await fetch(`${this.baseUrl}${pathWithQuery}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "OK-ACCESS-KEY": this.apiKey!,
-        "OK-ACCESS-SIGN": signature,
-        "OK-ACCESS-TIMESTAMP": ts,
-        "OK-ACCESS-PASSPHRASE": this.passphrase!,
+    const res = await this.fetchOkx(
+      `${this.baseUrl}${pathWithQuery}`,
+      {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          "OK-ACCESS-KEY": this.apiKey!,
+          "OK-ACCESS-SIGN": signature,
+          "OK-ACCESS-TIMESTAMP": ts,
+          "OK-ACCESS-PASSPHRASE": this.passphrase!,
+        },
+        body: bodyText || undefined,
       },
-      body: bodyText || undefined,
-    });
+      `${method} ${pathWithQuery}`
+    );
 
     if (!res.ok) {
       const msg = await res.text();
@@ -235,6 +244,10 @@ export class OkxClient implements ExchangeClient {
     if (!this.apiKey || !this.apiSecret || !this.passphrase) {
       throw new Error("OKX credentials are required in live mode");
     }
+  }
+
+  private fetchOkx(url: string, init: RequestInit | undefined, context: string): Promise<Response> {
+    return fetchWithContext(url, init, `OKX ${context}`);
   }
 
   private mapStatus(stateRaw: string | undefined): OrderState["status"] {

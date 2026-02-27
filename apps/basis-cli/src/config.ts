@@ -40,6 +40,11 @@ export function loadConfig(): CliConfig {
   const mode: TradeMode = modeRaw;
 
   const feeBps = Number(values["fee-bps"] ?? "4");
+  const bnHedgeModeRaw = (process.env.BN_HEDGE_MODE ?? "auto").trim().toLowerCase();
+  const bnHedgeMode: CliConfig["bnHedgeMode"] =
+    bnHedgeModeRaw === "hedge" || bnHedgeModeRaw === "oneway" || bnHedgeModeRaw === "auto"
+      ? bnHedgeModeRaw
+      : "auto";
 
   return {
     symbol,
@@ -56,5 +61,6 @@ export function loadConfig(): CliConfig {
     okxApiPassphrase: process.env.OKX_API_PASSPHRASE,
     bnApiKey: process.env.BN_API_KEY,
     bnApiSecret: process.env.BN_API_SECRET,
+    bnHedgeMode,
   };
 }
