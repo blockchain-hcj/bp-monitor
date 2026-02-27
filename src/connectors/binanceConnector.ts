@@ -22,7 +22,9 @@ export class BinanceConnector implements ExchangeConnector {
 
   connect(symbols: string[]): AsyncIterable<OrderbookDelta> {
     this.closed = false;
-    this.queue = new AsyncQueue<OrderbookDelta>();
+    this.queue = new AsyncQueue<OrderbookDelta>({
+      keyOf: (delta) => `${delta.exchange}:${delta.symbol}`,
+    });
     if (symbols.length === 0) {
       this.queue.end();
       return this.queue.iterate();

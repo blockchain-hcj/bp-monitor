@@ -140,7 +140,8 @@ class MonitorWorkerService {
     const top = this.topStore.upsert(delta, this.config.staleMsLimit);
     if (top.qualityFlag.includes("seq_gap")) {
       this.metrics.incCounter("spread_seq_gap_total");
-      await this.recoverSnapshot(delta);
+      // Snapshot recovery runs in background so high-frequency delta consumption is not blocked.
+      void this.recoverSnapshot(delta);
     }
 
     const tops = this.enabledExchanges()

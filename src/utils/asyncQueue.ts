@@ -1,7 +1,18 @@
+interface AsyncQueueOptions<T> {
+  keyOf?: (value: T) => string;
+}
+
 export class AsyncQueue<T> {
   private readonly values: T[] = [];
+  private readonly keyedOrder: string[] = [];
+  private readonly keyedValues = new Map<string, T>();
   private readonly resolvers: Array<(value: IteratorResult<T>) => void> = [];
   private ended = false;
+  private readonly keyOf: ((value: T) => string) | null;
+
+  constructor(options?: AsyncQueueOptions<T>) {
+    this.keyOf = options?.keyOf ?? null;
+  }
 
   push(value: T): void {
     if (this.ended) {
@@ -12,7 +23,18 @@ export class AsyncQueue<T> {
       resolver({ done: false, value });
       return;
     }
-    this.values.push(value);
+    if (!this.keyOf) {
+      this.values.push(value);
+      return;
+    }
+
+    const key = this.keyOf(value);
+    if (this.keyedValues.has(key)) {
+      this.keyedValues.set(key, value);
+      return;
+    }
+    this.keyedValues.set(key, value);
+    this.keyedOrder.push(key);
   }
 
   end(): void {
@@ -24,6 +46,12 @@ export class AsyncQueue<T> {
   }
 
   async next(): Promise<IteratorResult<T>> {
+    if (this.keyOf && this.keyedOrder.length > 0) {
+      const key = this.keyedOrder.shift() as string;
+      const value = this.keyedValues.get(key) as T;
+      this.keyedValues.delete(key);
+      return { done: false, value };
+    }
     if (this.values.length > 0) {
       return { done: false, value: this.values.shift() as T };
     }
