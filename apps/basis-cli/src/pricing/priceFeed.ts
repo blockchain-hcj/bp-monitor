@@ -11,7 +11,8 @@ export class PriceFeed {
 
   get isStale(): boolean {
     if (!this._snapshot) return true;
-    return Date.now() - this._snapshot.tsMs > STALE_MS;
+    const lagMs = Math.max(0, Date.now() - this._snapshot.tsMs);
+    return lagMs > STALE_MS;
   }
 
   update(snap: PriceSnapshot): void {

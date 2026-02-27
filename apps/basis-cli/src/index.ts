@@ -76,6 +76,7 @@ async function main() {
   orderManager.setOnUpdate(() => renderer.scheduleRender());
   appStateManager.setOnUpdate(() => renderer.scheduleRender());
   appStateManager.setOnGoBack(() => orderManager.reset());
+  const renderHeartbeat = setInterval(() => renderer.scheduleRender(), 250);
 
   // Wire up NATS events
   subscriber.onSnapshot((snap) => {
@@ -106,6 +107,7 @@ async function main() {
     }, 3000).unref();
 
     appStateManager.destroy();
+    clearInterval(renderHeartbeat);
     process.stdout.write("\n\x1b[?25h"); // Show cursor
 
     try {

@@ -27,7 +27,10 @@ export interface PriceSnapshot {
   okxAsk: number;
   bpsBinanceToOkx: number;
   bpsOkxToBinance: number;
+  // Source-side event time (publish/ingest), used for market freshness.
   tsMs: number;
+  // Local receive time, used for transport/consumer freshness.
+  tsRecvMs: number;
 }
 
 export interface OrderState {

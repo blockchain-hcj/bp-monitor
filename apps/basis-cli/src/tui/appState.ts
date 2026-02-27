@@ -110,6 +110,7 @@ export class AppStateManager {
     // Switch NATS subscription
     const newSubject = `${this.config.natsSubjectPrefix}.${symbol}`;
     this.priceFeed.clear();
+    this.subscriber.pauseDiscovery();
     this.subscriber.switchSubject(newSubject);
 
     // Start position polling
@@ -130,6 +131,7 @@ export class AppStateManager {
     this.state.searchInput = "";
     this.refilter();
     this.priceFeed.clear();
+    this.subscriber.resumeDiscovery();
     this.emit();
   }
 

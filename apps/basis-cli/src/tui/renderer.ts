@@ -15,7 +15,7 @@ const BG_RED = `${ESC}[41m`;
 const BG_CYAN = `${ESC}[46m`;
 const BLACK = `${ESC}[30m`;
 
-const MIN_RENDER_INTERVAL_MS = 100; // 10fps
+const MIN_RENDER_INTERVAL_MS = 50; // 20fps
 
 export class Renderer {
   private lastRenderMs = 0;
@@ -128,20 +128,25 @@ export class Renderer {
     const badges: string[] = [];
     if (!state.natsConnected) badges.push(`${BG_RED}${WHITE} DISCONNECTED ${RESET}`);
     if (snap) {
-      const lagMs = Date.now() - snap.tsMs;
-      if (lagMs > 3000) {
-        badges.push(`${BG_RED}${WHITE} STALE ${fmtLag(lagMs)} ${RESET}`);
-      } else if (lagMs > 1000) {
-        badges.push(`${YELLOW}lag: ${fmtLag(lagMs)}${RESET}`);
+      const srcLagMs = Math.max(0, Date.now() - snap.tsMs);
+      const recvLagMs = Math.max(0, Date.now() - snap.tsRecvMs);
+      if (srcLagMs > 3000) {
+        badges.push(`${BG_RED}${WHITE} STALE src:${fmtLag(srcLagMs)} ${RESET}`);
+      } else if (srcLagMs > 1000) {
+        badges.push(`${YELLOW}src lag: ${fmtLag(srcLagMs)}${RESET}`);
       } else {
-        badges.push(`${DIM}lag: ${fmtLag(lagMs)}${RESET}`);
+        badges.push(`${DIM}src lag: ${fmtLag(srcLagMs)}${RESET}`);
       }
+      badges.push(`${DIM}recv lag: ${fmtLag(recvLagMs)}${RESET}`);
     } else if (state.priceStale) {
       badges.push(`${YELLOW} NO DATA ${RESET}`);
     }
     // Debug: NATS message counters
     if (this.subscriber) {
-      badges.push(`${DIM}nats: ${this.subscriber.msgTotal} total / ${this.subscriber.msgMatched} matched / ${this.subscriber.msgParseFail} fail${RESET}`);
+      badges.push(`${DIM}nats: ${this.subscriber.msgTotal} total / ${this.subscriber.msgMatched} matched (${this.subscriber.msgSnapshotOk} ok ${this.subscriber.msgSnapshotNull} null) / ${this.subscriber.msgParseFail} fail / msg ${this.subscriber.matchedPerSec.toFixed(1)}/s / chg ${this.subscriber.changedPerSec.toFixed(1)}/s${RESET}`);
+      if (this.subscriber.priceSubject) {
+        badges.push(`${DIM}sub: ${this.subscriber.priceSubject}${RESET}`);
+      }
     }
     if (badges.length > 0) lines.push("  " + badges.join("  "));
 
