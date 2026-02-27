@@ -47,6 +47,7 @@ class MonitorWorkerService {
   private lastEventAtMs = 0;
   private readonly snapshotInFlight = new Set<string>();
   private readonly persistedDbBucketByPair = new Map<string, number>();
+  private readonly lastPublishedSignatureByPair = new Map<string, string>();
   private retentionCleanupInFlight = false;
 
   constructor(params: WorkerData) {
@@ -164,6 +165,15 @@ class MonitorWorkerService {
     if (Math.abs(event.bps_a_to_b) < minBpsAbs && Math.abs(event.bps_b_to_a) < minBpsAbs) {
       return;
     }
+
+    const pairKey = `${event.symbol}:${event.exchange_a}:${event.exchange_b}`;
+    const signature = this.publishSignature(event);
+    if (this.lastPublishedSignatureByPair.get(pairKey) === signature) {
+      this.metrics.incCounter("spread_publish_duplicate_drop_total");
+      return;
+    }
+    this.lastPublishedSignatureByPair.set(pairKey, signature);
+
     event.ts_publish = Date.now();
     const dbPersistPlan = this.planDbPersist(event);
     if (!dbPersistPlan.persist) {
@@ -247,6 +257,24 @@ class MonitorWorkerService {
         this.persistedDbBucketByPair.delete(key);
       }
     }
+    for (const key of this.lastPublishedSignatureByPair.keys()) {
+      const symbol = key.split(":")[0];
+      if (!activeSymbols.has(symbol)) {
+        this.lastPublishedSignatureByPair.delete(key);
+      }
+    }
+  }
+
+  private publishSignature(event: SpreadEvent): string {
+    return [
+      event.best_bid_a,
+      event.best_ask_a,
+      event.best_bid_b,
+      event.best_ask_b,
+      event.bps_a_to_b,
+      event.bps_b_to_a,
+      event.quality_flag.join(",")
+    ].join("|");
   }
 
   private async runRetentionCleanup(): Promise<void> {

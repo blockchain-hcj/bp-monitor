@@ -136,6 +136,7 @@ export interface RuntimeConfig {
   postgresUrl: string;
   publishTimeoutMs: number;
   publishRetries: number;
+  publishMaxPerSecPerPair: number;
   dbInsertTimeoutMs: number;
   dbSampleIntervalMs: number;
   dbRetentionDays: number;
