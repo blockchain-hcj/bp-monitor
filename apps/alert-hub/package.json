@@ -7,6 +7,9 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare:sdk": "npm --prefix ../../sdks/alert-sdk install && npm --prefix ../../sdks/alert-sdk run build",
+    "prebuild": "npm run prepare:sdk",
+    "predev": "npm run prepare:sdk",
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env --enable-source-maps dist/index.js",
     "dev": "node --env-file-if-exists=.env --import tsx src/index.ts"
