@@ -51,6 +51,38 @@ services:
       timeout: 3s
       retries: 12
 
+  news-feed:
+    build:
+      context: .
+      dockerfile: apps/news-feed/Dockerfile
+    environment:
+      CONTROL_PORT: 18380
+      ALERT_HUB_URL: http://alert-hub:18280
+      WATCH_COINS: BTC,ETH,SOL
+      BWE_NEWS_ENABLED: "true"
+      BWE_NEWS_WS_URL: wss://bwenews-api.bwe-ws.com/ws
+      BWE_NEWS_HTTP_URL: https://rss-public.bwe-ws.com/
+      BWE_NEWS_HTTP_FALLBACK_ENABLED: "true"
+      BWE_NEWS_HTTP_POLL_MS: 15000
+      BWE_NEWS_WS_STALE_MS: 45000
+    depends_on:
+      alert-hub:
+        condition: service_healthy
+    ports:
+      - "18380:18380"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18380/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
   monitor:
     build:
       context: .

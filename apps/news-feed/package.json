@@ -1,0 +1,27 @@
+{
+  "name": "news-feed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepare:sdk": "npm --prefix ../../sdks/alert-sdk install && npm --prefix ../../sdks/alert-sdk run build",
+    "prebuild": "npm run prepare:sdk",
+    "predev": "npm run prepare:sdk",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --enable-source-maps dist/index.js",
+    "dev": "node --env-file-if-exists=.env --import tsx src/index.ts"
+  },
+  "dependencies": {
+    "alert-sdk": "file:../../sdks/alert-sdk",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
