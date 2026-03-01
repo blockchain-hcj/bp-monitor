@@ -1,0 +1,25 @@
+{
+  "name": "alert-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --enable-source-maps dist/index.js",
+    "dev": "node --env-file-if-exists=.env --import tsx src/index.ts"
+  },
+  "dependencies": {
+    "alert-sdk": "file:../../sdks/alert-sdk",
+    "nats": "^2.29.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

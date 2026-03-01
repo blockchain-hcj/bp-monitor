@@ -33,11 +33,12 @@ Where `A/B` are any enabled exchange pair for the same symbol.
 1. Configure env files:
    - `cp .env.example .env`
    - `cp apps/arb-engine/.env.example apps/arb-engine/.env`
-2. Build and start all services (NATS + Postgres + monitor + arb-engine):
+2. Build and start all services (NATS + Postgres + alert-hub + monitor + arb-engine):
    - `docker compose up -d --build`
 3. Check status:
    - `docker compose ps`
 4. Check health:
+   - `curl http://127.0.0.1:18280/healthz`
    - `curl http://127.0.0.1:18081/healthz`
    - `curl http://127.0.0.1:18180/healthz`
 
@@ -46,10 +47,36 @@ Where `A/B` are any enabled exchange pair for the same symbol.
   - `NATS_URL` is forced to `nats://nats:4222`
   - `POSTGRES_URL` is forced to `postgres://postgres:postgres@postgres:5432/monitors`
 - Host ports:
+  - `18280` => alert-hub HTTP + WS
   - `18081` => monitor control plane
   - `18180` => arb-engine control plane
   - `4222/8222` => NATS
   - `5432` => PostgreSQL
+
+## Alert System
+- Shared SDK:
+  - `sdks/alert-sdk` (TypeScript `AlertClient`)
+- Hub:
+  - `apps/alert-hub` (`POST /alerts`, `GET /alerts`, `PUT /alerts/:id/ack`, `WS /ws`)
+- Menu bar app:
+  - `apps/alert-bar` (Electron + menubar)
+
+### Manual Smoke Test
+1. Start hub:
+   - `cd apps/alert-hub && cp .env.example .env && npm install && npm run dev`
+2. POST a test alert:
+   - `curl -X POST http://127.0.0.1:18280/alerts -H 'content-type: application/json' -d '{\"severity\":\"critical\",\"title\":\"test alert\",\"source\":\"manual\"}'`
+3. Query alerts:
+   - `curl 'http://127.0.0.1:18280/alerts?limit=10'`
+4. Start menu bar app (macOS):
+   - `cd apps/alert-bar && cp .env.example .env && npm install && npm run dev`
+
+### Env Files
+- `apps/alert-hub/.env.example`
+  - `ALERT_HUB_HOST`, `ALERT_HUB_PORT`, `ALERT_HUB_RING_SIZE`, `ALERT_HUB_WS_PATH`, `ALERT_HUB_CORS_ORIGIN`
+  - `ALERT_HUB_NATS_ENABLED`, `ALERT_HUB_NATS_SUBJECT`, `NATS_URL`
+- `apps/alert-bar/.env.example`
+  - `ALERT_HUB_URL`, `ALERT_HUB_WS_URL`, `ALERT_BAR_POPUP_ON_HIGH`
 
 ## Control Plane
 - `GET /healthz`

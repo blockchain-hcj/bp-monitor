@@ -1,0 +1,26 @@
+{
+  "name": "alert-bar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env ./node_modules/electron/cli.js .",
+    "dev": "npm run build && npm run start"
+  },
+  "dependencies": {
+    "alert-sdk": "file:../../sdks/alert-sdk",
+    "electron": "^31.0.2",
+    "menubar": "^9.3.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  }
+}

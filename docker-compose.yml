@@ -22,6 +22,35 @@ services:
       timeout: 3s
       retries: 20
 
+  alert-hub:
+    build:
+      context: .
+      dockerfile: apps/alert-hub/Dockerfile
+    environment:
+      ALERT_HUB_HOST: 0.0.0.0
+      ALERT_HUB_PORT: 18280
+      ALERT_HUB_RING_SIZE: 500
+      ALERT_HUB_NATS_ENABLED: "true"
+      ALERT_HUB_NATS_SUBJECT: alerts.>
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_started
+    ports:
+      - "18280:18280"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18280/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
   monitor:
     build:
       context: .
@@ -35,6 +64,8 @@ services:
       nats:
         condition: service_started
       postgres:
+        condition: service_healthy
+      alert-hub:
         condition: service_healthy
     ports:
       - "18081:18081"
@@ -63,6 +94,8 @@ services:
       nats:
         condition: service_started
       monitor:
+        condition: service_healthy
+      alert-hub:
         condition: service_healthy
     ports:
       - "18180:18180"

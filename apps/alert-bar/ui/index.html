@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Alert Bar</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="panel-header">
+        <div>
+          <h1>Alert Hub</h1>
+          <p id="ws-status" class="muted">connecting</p>
+        </div>
+        <div class="unread-block">
+          <span class="muted">Unread</span>
+          <span id="unread-count" class="badge">0</span>
+        </div>
+      </header>
+      <section class="header-actions">
+        <button id="btn-refresh" class="action-btn">Refresh</button>
+        <button id="btn-ack-all" class="action-btn">ACK All</button>
+      </section>
+      <section class="summary-grid" id="summary-grid">
+        <article class="stat-card">
+          <p class="muted">1h Total</p>
+          <p id="sum-total" class="stat-value">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="muted">1h Warn</p>
+          <p id="sum-warn" class="stat-value warn">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="muted">1h Error</p>
+          <p id="sum-error" class="stat-value error">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="muted">1h Critical</p>
+          <p id="sum-critical" class="stat-value critical">0</p>
+        </article>
+      </section>
+      <section class="key-section">
+        <div class="section-title">Recent Key Alerts</div>
+        <ul id="key-alert-list" class="key-list"></ul>
+      </section>
+      <section>
+        <div class="section-title">All Recent Alerts</div>
+        <ul id="alert-list" class="alert-list"></ul>
+      </section>
+      <section class="detail-section">
+        <div class="section-title">Details</div>
+        <div id="detail-panel" class="detail-panel">
+          <p class="muted">Select an alert to view details</p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="../dist/ui/renderer.js"></script>
+  </body>
+</html>
