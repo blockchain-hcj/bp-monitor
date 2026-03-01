@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
+import { ExchangeClient, ExchangePosition, LegSide, OpenOrderState, OrderState } from "../types.js";
 import { fetchWithContext } from "./errorFormat.js";
 
 function toQuery(params: Record<string, string | number | boolean>): string {
@@ -166,6 +166,42 @@ export class BinanceClient implements ExchangeClient {
     };
   }
 
+  async getOpenOrders(symbol: string): Promise<OpenOrderState[]> {
+    this.assertCredential();
+    const ts = Date.now();
+    const query = toQuery({ symbol, timestamp: ts, recvWindow: 5000 });
+    const signature = sign(this.apiSecret!, query);
+    const res = await this.fetchBinance(
+      `${this.baseUrl}/fapi/v1/openOrders?${query}&signature=${signature}`,
+      { headers: { "X-MBX-APIKEY": this.apiKey! } },
+      `GET /fapi/v1/openOrders symbol=${symbol}`
+    );
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(`Binance open orders failed: ${res.status} ${msg}`);
+    }
+    const payload = (await res.json()) as Array<{
+      orderId?: number | string;
+      side?: string;
+      price?: string;
+      executedQty?: string;
+      avgPrice?: string;
+      status?: string;
+      updateTime?: number;
+    }>;
+    return payload
+      .map((row): OpenOrderState => ({
+        orderId: String(row.orderId ?? "unknown"),
+        side: row.side?.toUpperCase() === "SELL" ? "sell" : "buy",
+        price: Number(row.price ?? "0"),
+        status: this.mapStatus(row.status),
+        filledQty: Number(row.executedQty ?? "0"),
+        avgPrice: Number(row.avgPrice ?? "0"),
+        updateTimeMs: Number(row.updateTime ?? Date.now()),
+      }))
+      .filter((row) => row.status === "new" || row.status === "partial");
+  }
+
   async cancelOrder(symbol: string, orderId: string): Promise<{ ok: boolean }> {
     this.assertCredential();
     const ts = Date.now();
@@ -208,23 +244,65 @@ export class BinanceClient implements ExchangeClient {
       throw new Error(`Binance position query failed: ${res.status} ${msg}`);
     }
 
-    const rows = (await res.json()) as Array<{ symbol: string; positionAmt: string; markPrice: string }>;
+    const rows = (await res.json()) as Array<{
+      symbol: string;
+      positionAmt: string;
+      markPrice: string;
+      entryPrice?: string;
+    }>;
     const matched = rows.filter((v) => v.symbol === symbol);
     if (matched.length === 0) {
-      return { symbol, longNotionalUsdt: 0, shortNotionalUsdt: 0 };
+      return {
+        symbol,
+        longQty: 0,
+        shortQty: 0,
+        longNotionalUsdt: 0,
+        shortNotionalUsdt: 0,
+        longAvgEntryPrice: 0,
+        shortAvgEntryPrice: 0,
+      };
     }
 
+    let longQty = 0;
+    let shortQty = 0;
     let longNotionalUsdt = 0;
     let shortNotionalUsdt = 0;
+    let longEntryQty = 0;
+    let shortEntryQty = 0;
+    let longEntryCost = 0;
+    let shortEntryCost = 0;
     for (const row of matched) {
       const amt = Number(row.positionAmt);
       const px = Number(row.markPrice);
+      const entry = Number(row.entryPrice ?? "0");
       const notional = Math.abs(amt * px);
       if (!Number.isFinite(notional) || notional <= 0) continue;
-      if (amt > 0) longNotionalUsdt += notional;
-      else if (amt < 0) shortNotionalUsdt += notional;
+      if (amt > 0) {
+        longQty += amt;
+        longNotionalUsdt += notional;
+        if (Number.isFinite(entry) && entry > 0) {
+          longEntryQty += amt;
+          longEntryCost += amt * entry;
+        }
+      } else if (amt < 0) {
+        const absAmt = Math.abs(amt);
+        shortQty += absAmt;
+        shortNotionalUsdt += notional;
+        if (Number.isFinite(entry) && entry > 0) {
+          shortEntryQty += absAmt;
+          shortEntryCost += absAmt * entry;
+        }
+      }
     }
-    return { symbol, longNotionalUsdt, shortNotionalUsdt };
+    return {
+      symbol,
+      longQty,
+      shortQty,
+      longNotionalUsdt,
+      shortNotionalUsdt,
+      longAvgEntryPrice: longEntryQty > 0 ? longEntryCost / longEntryQty : 0,
+      shortAvgEntryPrice: shortEntryQty > 0 ? shortEntryCost / shortEntryQty : 0,
+    };
   }
 
   private formatQuantity(rawQty: number, rules: SymbolTradeRule): string {
@@ -242,15 +320,13 @@ export class BinanceClient implements ExchangeClient {
 
   private formatPrice(rawPrice: number, rules: SymbolTradeRule, side: LegSide): string {
     const precision = Math.max(0, rules.pricePrecision);
-    const scale = 10 ** precision;
-    const tickInt = Math.max(1, Math.round(rules.tickSize * scale));
-    const priceIntRaw = Math.max(1, Math.round(rawPrice * scale));
-    const priceInt =
+    const tick = Math.max(rules.tickSize, 1e-12);
+    const normalizedRaw =
       side === "buy"
-        ? Math.ceil(priceIntRaw / tickInt) * tickInt
-        : Math.floor(priceIntRaw / tickInt) * tickInt;
-    const normalized = Math.max(tickInt, priceInt);
-    return (normalized / scale).toFixed(precision);
+        ? Math.ceil(rawPrice / tick) * tick
+        : Math.floor(rawPrice / tick) * tick;
+    const normalized = Math.max(tick, normalizedRaw);
+    return normalized.toFixed(precision);
   }
 
   private async getSymbolTradeRule(symbol: string): Promise<SymbolTradeRule> {
@@ -280,20 +356,38 @@ export class BinanceClient implements ExchangeClient {
 
     const stepPrecision = this.decimalsFromStep(lot.stepSize);
     const qtyPrecision = Math.min(stepPrecision, item.quantityPrecision ?? stepPrecision);
+    const tickPrecision = this.decimalsFromStep(priceFilter.tickSize);
     const rule: SymbolTradeRule = {
       stepSize: Number(lot.stepSize),
       minQty: Number(lot.minQty),
       qtyPrecision,
       tickSize: Number(priceFilter.tickSize),
-      pricePrecision: Math.max(0, item.pricePrecision ?? this.decimalsFromStep(priceFilter.tickSize)),
+      // Use tick precision as floor to avoid over-coarse rounding when exchangeInfo pricePrecision is smaller.
+      pricePrecision: Math.max(tickPrecision, item.pricePrecision ?? 0),
     };
     this.ruleCache.set(symbol, rule);
     return rule;
   }
 
   private decimalsFromStep(stepSize: string): number {
-    if (!stepSize.includes(".")) return 0;
-    return stepSize.split(".")[1].replace(/0+$/, "").length;
+    const raw = stepSize.trim().toLowerCase();
+    const expMatch = raw.match(/e-(\d+)$/);
+    if (expMatch) {
+      const exp = Number(expMatch[1]);
+      return Number.isFinite(exp) && exp >= 0 ? exp : 0;
+    }
+    if (raw.includes(".")) {
+      return raw.split(".")[1].replace(/0+$/, "").length;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    let decimals = 0;
+    let x = n;
+    while (decimals < 12 && Math.abs(Math.round(x) - x) > 1e-10) {
+      x *= 10;
+      decimals += 1;
+    }
+    return decimals;
   }
 
   private async isHedgeMode(): Promise<boolean> {

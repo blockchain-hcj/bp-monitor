@@ -48,7 +48,7 @@ export class PostgresSpreadReadRepository {
   constructor(postgresUrl: string) {
     this.pool = new Pool({
       connectionString: postgresUrl,
-      max: 8
+      max: 32
     });
   }
 
@@ -56,6 +56,7 @@ export class PostgresSpreadReadRepository {
     const sql = `
       SELECT symbol
       FROM spread_events
+      WHERE event_time >= now() - interval '1 day'
       GROUP BY symbol
       ORDER BY max(event_time) DESC
       LIMIT $1

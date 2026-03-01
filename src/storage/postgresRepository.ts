@@ -46,6 +46,12 @@ export class PostgresSpreadRepository implements SpreadRepository {
         "CREATE INDEX IF NOT EXISTS spread_events_symbol_time_idx ON spread_events (symbol, event_time DESC);"
       );
       await client.query("CREATE INDEX IF NOT EXISTS spread_events_time_idx ON spread_events (event_time DESC);");
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_spread_payload_exchange_a ON spread_events ((payload->>'exchange_a'));"
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_spread_payload_exchange_b ON spread_events ((payload->>'exchange_b'));"
+      );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");

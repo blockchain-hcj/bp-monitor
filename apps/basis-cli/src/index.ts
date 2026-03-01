@@ -78,6 +78,11 @@ async function main() {
   orderManager.setOnUpdate(() => renderer.scheduleRender());
   appStateManager.setOnUpdate(() => renderer.scheduleRender());
   appStateManager.setOnGoBack(() => orderManager.reset());
+  appStateManager.setOnSymbolSelected((symbol) => {
+    void orderManager.recoverOpenOrders(symbol).catch((err) => {
+      console.error("Recover open orders failed:", err);
+    });
+  });
   const renderHeartbeat = setInterval(() => renderer.scheduleRender(), 250);
 
   // Wire up NATS events

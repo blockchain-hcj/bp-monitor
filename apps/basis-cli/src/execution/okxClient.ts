@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
+import { ExchangeClient, ExchangePosition, LegSide, OpenOrderState, OrderState } from "../types.js";
 import { fetchWithContext } from "./errorFormat.js";
 
 function toInstId(symbol: string): string {
@@ -126,6 +126,35 @@ export class OkxClient implements ExchangeClient {
     };
   }
 
+  async getOpenOrders(symbol: string): Promise<OpenOrderState[]> {
+    this.assertCredential();
+    const instId = toInstId(symbol);
+    const payload = await this.privateRequest<{
+      data?: Array<{
+        ordId?: string;
+        side?: string;
+        px?: string;
+        fillSz?: string;
+        avgPx?: string;
+        state?: string;
+        uTime?: string;
+      }>;
+    }>("GET", `/api/v5/trade/orders-pending?instType=SWAP&instId=${instId}`);
+
+    const rows = payload.data ?? [];
+    return rows
+      .map((row): OpenOrderState => ({
+        orderId: String(row.ordId ?? "unknown"),
+        side: row.side === "sell" ? "sell" : "buy",
+        price: Number(row.px ?? "0"),
+        status: this.mapStatus(row.state),
+        filledQty: Number(row.fillSz ?? "0"),
+        avgPrice: Number(row.avgPx ?? "0"),
+        updateTimeMs: Number(row.uTime ?? Date.now()),
+      }))
+      .filter((row) => row.status === "new" || row.status === "partial");
+  }
+
   async cancelOrder(symbol: string, orderId: string): Promise<{ ok: boolean }> {
     this.assertCredential();
     const instId = toInstId(symbol);
@@ -152,26 +181,65 @@ export class OkxClient implements ExchangeClient {
   async getPosition(symbol: string): Promise<ExchangePosition> {
     this.assertCredential();
     const instId = toInstId(symbol);
-    const payload = await this.privateRequest<{ data?: Array<{ pos?: string; notionalUsd?: string }> }>(
+    const payload = await this.privateRequest<{
+      data?: Array<{ pos?: string; notionalUsd?: string; avgPx?: string }>;
+    }>(
       "GET",
       `/api/v5/account/positions?instType=SWAP&instId=${instId}`
     );
 
     const rows = payload.data ?? [];
     if (rows.length === 0) {
-      return { symbol, longNotionalUsdt: 0, shortNotionalUsdt: 0 };
+      return {
+        symbol,
+        longQty: 0,
+        shortQty: 0,
+        longNotionalUsdt: 0,
+        shortNotionalUsdt: 0,
+        longAvgEntryPrice: 0,
+        shortAvgEntryPrice: 0,
+      };
     }
 
+    let longQty = 0;
+    let shortQty = 0;
     let longNotionalUsdt = 0;
     let shortNotionalUsdt = 0;
+    let longEntryQty = 0;
+    let shortEntryQty = 0;
+    let longEntryCost = 0;
+    let shortEntryCost = 0;
     for (const row of rows) {
       const pos = Number(row.pos ?? "0");
       const notional = Math.abs(Number(row.notionalUsd ?? "0"));
+      const avgPx = Number(row.avgPx ?? "0");
       if (!Number.isFinite(notional) || notional <= 0) continue;
-      if (pos > 0) longNotionalUsdt += notional;
-      else if (pos < 0) shortNotionalUsdt += notional;
+      if (pos > 0) {
+        longQty += pos;
+        longNotionalUsdt += notional;
+        if (Number.isFinite(avgPx) && avgPx > 0) {
+          longEntryQty += pos;
+          longEntryCost += pos * avgPx;
+        }
+      } else if (pos < 0) {
+        const absPos = Math.abs(pos);
+        shortQty += absPos;
+        shortNotionalUsdt += notional;
+        if (Number.isFinite(avgPx) && avgPx > 0) {
+          shortEntryQty += absPos;
+          shortEntryCost += absPos * avgPx;
+        }
+      }
     }
-    return { symbol, longNotionalUsdt, shortNotionalUsdt };
+    return {
+      symbol,
+      longQty,
+      shortQty,
+      longNotionalUsdt,
+      shortNotionalUsdt,
+      longAvgEntryPrice: longEntryQty > 0 ? longEntryCost / longEntryQty : 0,
+      shortAvgEntryPrice: shortEntryQty > 0 ? shortEntryCost / shortEntryQty : 0,
+    };
   }
 
   private quantizePriceInternal(rawPrice: number, tickSz: number, side: LegSide): number {

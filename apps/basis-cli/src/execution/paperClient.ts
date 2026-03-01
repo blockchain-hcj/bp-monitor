@@ -1,4 +1,4 @@
-import { Exchange, ExchangeClient, ExchangePosition, LegSide, OrderState } from "../types.js";
+import { Exchange, ExchangeClient, ExchangePosition, LegSide, OpenOrderState, OrderState } from "../types.js";
 
 export class PaperClient implements ExchangeClient {
   private readonly orders = new Map<string, OrderState>();
@@ -68,6 +68,10 @@ export class PaperClient implements ExchangeClient {
     };
   }
 
+  async getOpenOrders(_symbol: string): Promise<OpenOrderState[]> {
+    return [];
+  }
+
   async cancelOrder(_symbol: string, orderId: string): Promise<{ ok: boolean }> {
     const prev = this.orders.get(orderId);
     if (!prev) return { ok: false };
@@ -85,7 +89,15 @@ export class PaperClient implements ExchangeClient {
   }
 
   async getPosition(symbol: string): Promise<ExchangePosition> {
-    return { symbol, longNotionalUsdt: 0, shortNotionalUsdt: 0 };
+    return {
+      symbol,
+      longQty: 0,
+      shortQty: 0,
+      longNotionalUsdt: 0,
+      shortNotionalUsdt: 0,
+      longAvgEntryPrice: 0,
+      shortAvgEntryPrice: 0,
+    };
   }
 
   private newOrderId(symbol: string, side: LegSide, mode: "open" | "close"): string {

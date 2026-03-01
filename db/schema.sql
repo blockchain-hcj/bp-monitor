@@ -11,3 +11,9 @@ CREATE INDEX IF NOT EXISTS spread_events_symbol_time_idx
 
 CREATE INDEX IF NOT EXISTS spread_events_time_idx
   ON spread_events (event_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_spread_payload_exchange_a
+  ON spread_events ((payload->>'exchange_a'));
+
+CREATE INDEX IF NOT EXISTS idx_spread_payload_exchange_b
+  ON spread_events ((payload->>'exchange_b'));

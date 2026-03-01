@@ -5,6 +5,7 @@ import {
   LegOrderState,
   LegSide,
   LogEntry,
+  OpenOrderState,
   SessionState,
 } from "../types.js";
 import { LimitOrderPricer } from "../pricing/limitOrderPricer.js";
@@ -177,6 +178,52 @@ export class OrderManager {
     }
   }
 
+  async recoverOpenOrders(symbol: string): Promise<void> {
+    this.stopPolling();
+    this.stopTimeout();
+    this.state.binanceLeg = null;
+    this.state.okxLeg = null;
+
+    const current = this.getParams
+      ? this.getParams()
+      : {
+          symbol,
+          direction: this.config.direction,
+          quantity: this.config.quantity,
+          slippageBps: this.config.slippageBps,
+        };
+    this.activeParams = { ...current, symbol };
+
+    const [bnResult, okxResult] = await Promise.allSettled([
+      this.binanceClient.getOpenOrders(symbol),
+      this.okxClient.getOpenOrders(symbol),
+    ]);
+
+    if (bnResult.status === "fulfilled") {
+      this.state.binanceLeg = this.pickLatestLeg("binance", bnResult.value);
+    } else {
+      this.log(`Recover BN open orders failed: ${formatErrorDetails(bnResult.reason)}`);
+    }
+    if (okxResult.status === "fulfilled") {
+      this.state.okxLeg = this.pickLatestLeg("okx", okxResult.value);
+    } else {
+      this.log(`Recover OKX open orders failed: ${formatErrorDetails(okxResult.reason)}`);
+    }
+
+    const recoveredCount = Number(Boolean(this.state.binanceLeg)) + Number(Boolean(this.state.okxLeg));
+    if (recoveredCount > 0) {
+      this.state.phase = "MONITORING";
+      this.log(
+        `Recovered open orders: BN=${this.state.binanceLeg ? this.state.binanceLeg.orderId : "-"} OKX=${this.state.okxLeg ? this.state.okxLeg.orderId : "-"}`
+      );
+      this.startPolling();
+    } else {
+      this.state.phase = "IDLE";
+      this.log(`No open orders on exchanges for ${symbol}`);
+    }
+    this.emit();
+  }
+
   async cancelAll(): Promise<void> {
     if (this.state.phase !== "MONITORING") {
       this.log("Nothing to cancel");
@@ -303,21 +350,42 @@ export class OrderManager {
 
   private async poll() {
     if (this.state.phase !== "MONITORING") return;
-    if (!this.state.binanceLeg || !this.state.okxLeg) return;
-    const params = this.activeParams!;
+    if (!this.state.binanceLeg && !this.state.okxLeg) return;
+    const params = this.activeParams ??
+      (this.getParams
+        ? this.getParams()
+        : {
+            symbol: this.config.symbol,
+            direction: this.config.direction,
+            quantity: this.config.quantity,
+            slippageBps: this.config.slippageBps,
+          });
 
     try {
       const [bnStatus, okxStatus] = await Promise.all([
-        this.binanceClient.getOrderStatus(params.symbol, this.state.binanceLeg.orderId),
-        this.okxClient.getOrderStatus(params.symbol, this.state.okxLeg.orderId),
+        this.state.binanceLeg
+          ? this.binanceClient.getOrderStatus(params.symbol, this.state.binanceLeg.orderId)
+          : Promise.resolve(null),
+        this.state.okxLeg
+          ? this.okxClient.getOrderStatus(params.symbol, this.state.okxLeg.orderId)
+          : Promise.resolve(null),
       ]);
 
-      this.updateLeg(this.state.binanceLeg, bnStatus.status, bnStatus.filledQty, bnStatus.avgPrice);
-      this.updateLeg(this.state.okxLeg, okxStatus.status, okxStatus.filledQty, okxStatus.avgPrice);
+      if (this.state.binanceLeg && bnStatus) {
+        this.updateLeg(this.state.binanceLeg, bnStatus.status, bnStatus.filledQty, bnStatus.avgPrice);
+      }
+      if (this.state.okxLeg && okxStatus) {
+        this.updateLeg(this.state.okxLeg, okxStatus.status, okxStatus.filledQty, okxStatus.avgPrice);
+      }
       this.emit();
 
       // Check if both filled
-      if (this.state.binanceLeg.status === "filled" && this.state.okxLeg.status === "filled") {
+      if (
+        this.state.binanceLeg &&
+        this.state.okxLeg &&
+        this.state.binanceLeg.status === "filled" &&
+        this.state.okxLeg.status === "filled"
+      ) {
         this.stopPolling();
         this.stopTimeout();
         this.state.phase = "FILLED";
@@ -358,9 +426,26 @@ export class OrderManager {
     }
   }
 
+  private pickLatestLeg(exchange: "binance" | "okx", rows: OpenOrderState[]): LegOrderState | null {
+    if (rows.length === 0) return null;
+    const latest = [...rows].sort((a, b) => b.updateTimeMs - a.updateTimeMs)[0];
+    return {
+      exchange,
+      side: latest.side,
+      orderId: latest.orderId,
+      limitPrice: latest.price,
+      status: latest.status,
+      filledQty: latest.filledQty,
+      avgPrice: latest.avgPrice,
+      placedAtMs: latest.updateTimeMs || Date.now(),
+      amendCount: 0,
+    };
+  }
+
   private async checkSingleLegFill() {
-    const bnLeg = this.state.binanceLeg!;
-    const okxLeg = this.state.okxLeg!;
+    const bnLeg = this.state.binanceLeg;
+    const okxLeg = this.state.okxLeg;
+    if (!bnLeg || !okxLeg) return;
     const params = this.activeParams!;
 
     // One filled, other not

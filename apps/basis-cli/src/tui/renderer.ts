@@ -152,16 +152,13 @@ export class Renderer {
 
     lines.push(hr);
 
-    // Prices + Positions
+    // Prices
     if (snap) {
-      const bnPosStr = fmtPosition(appState.binancePosition);
-      const okxPosStr = fmtPosition(appState.okxPosition);
-
       lines.push(
-        `  ${BOLD}BINANCE${RESET}  Bid: ${fmt(snap.binanceBid)}  Ask: ${fmt(snap.binanceAsk)}   │  POS  Long: $${bnPosStr.long}  Short: $${bnPosStr.short}`
+        `  ${BOLD}BINANCE${RESET}  Bid: ${fmt(snap.binanceBid)}  Ask: ${fmt(snap.binanceAsk)}`
       );
       lines.push(
-        `  ${BOLD}OKX${RESET}      Bid: ${fmt(snap.okxBid)}  Ask: ${fmt(snap.okxAsk)}   │  POS  Long: $${okxPosStr.long}  Short: $${okxPosStr.short}`
+        `  ${BOLD}OKX${RESET}      Bid: ${fmt(snap.okxBid)}  Ask: ${fmt(snap.okxAsk)}`
       );
       lines.push(hr);
 
@@ -178,6 +175,12 @@ export class Renderer {
     } else {
       lines.push(`  ${DIM}Waiting for price data...${RESET}`);
     }
+    lines.push(hr);
+
+    // Positions (always show, independent of orders)
+    lines.push(`  ${BOLD}POSITIONS${RESET}`);
+    lines.push(`  ${formatPositionLine("BINANCE", appState.binancePosition)}`);
+    lines.push(`  ${formatPositionLine("OKX", appState.okxPosition)}`);
     lines.push(hr);
 
     // Orders
@@ -237,7 +240,14 @@ export class Renderer {
 }
 
 function fmt(n: number): string {
-  return n.toFixed(2);
+  if (!Number.isFinite(n)) return "n/a";
+  const abs = Math.abs(n);
+  let decimals = 2;
+  if (abs < 0.01) decimals = 8;
+  else if (abs < 0.1) decimals = 6;
+  else if (abs < 1) decimals = 5;
+  else if (abs < 1000) decimals = 4;
+  return n.toFixed(decimals).replace(/\.?0+$/, "");
 }
 
 function fmtBps(n: number): string {
@@ -264,6 +274,18 @@ function fmtPosition(pos: ExchangePosition | null): { long: string; short: strin
     long: pos.longNotionalUsdt.toFixed(2),
     short: pos.shortNotionalUsdt.toFixed(2),
   };
+}
+
+function formatPositionLine(exchange: string, pos: ExchangePosition | null): string {
+  const p = fmtPosition(pos);
+  if (!pos) {
+    return `${BOLD}${exchange}${RESET}  ${DIM}loading...${RESET}`;
+  }
+  const net = pos.longNotionalUsdt - pos.shortNotionalUsdt;
+  const side = net > 0 ? "NET LONG" : net < 0 ? "NET SHORT" : "NET FLAT";
+  const longAvg = pos.longQty > 0 ? fmt(pos.longAvgEntryPrice) : "-";
+  const shortAvg = pos.shortQty > 0 ? fmt(pos.shortAvgEntryPrice) : "-";
+  return `${BOLD}${exchange}${RESET}  Long: $${p.long} @${longAvg}  Short: $${p.short} @${shortAvg}  │  ${side} $${Math.abs(net).toFixed(2)}`;
 }
 
 function formatLeg(leg: LegOrderState): string {

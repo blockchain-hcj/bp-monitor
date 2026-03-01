@@ -13,6 +13,7 @@ export class AppStateManager {
   private positionTimer: ReturnType<typeof setInterval> | null = null;
   private onUpdate: (() => void) | null = null;
   private _onGoBack: (() => void) | null = null;
+  private _onSymbolSelected: ((symbol: string) => void) | null = null;
 
   constructor(
     private readonly config: CliConfig,
@@ -53,6 +54,10 @@ export class AppStateManager {
 
   setOnGoBack(cb: () => void) {
     this._onGoBack = cb;
+  }
+
+  setOnSymbolSelected(cb: (symbol: string) => void) {
+    this._onSymbolSelected = cb;
   }
 
   private emit() {
@@ -112,6 +117,7 @@ export class AppStateManager {
     this.priceFeed.clear();
     this.subscriber.pauseDiscovery();
     this.subscriber.switchSubject(newSubject);
+    this._onSymbolSelected?.(symbol);
 
     // Start position polling
     this.startPositionPolling();

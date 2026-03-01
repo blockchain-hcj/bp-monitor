@@ -1,3 +1,5 @@
+const MAX_HISTOGRAM_SIZE = 10_000;
+
 export class MetricsRegistry {
   private readonly counters = new Map<string, number>();
   private readonly gauges = new Map<string, number>();
@@ -15,6 +17,13 @@ export class MetricsRegistry {
     const bucket = this.histograms.get(name);
     if (!bucket) {
       this.histograms.set(name, [value]);
+      return;
+    }
+    if (bucket.length >= MAX_HISTOGRAM_SIZE) {
+      const idx = Math.floor(Math.random() * (bucket.length + 1));
+      if (idx < bucket.length) {
+        bucket[idx] = value;
+      }
       return;
     }
     bucket.push(value);
@@ -43,6 +52,7 @@ export class MetricsRegistry {
       lines.push(`${name}_summary{quantile="0.95"} ${p95}`);
       lines.push(`${name}_summary{quantile="0.99"} ${p99}`);
       lines.push(`${name}_summary_count ${values.length}`);
+      values.length = 0;
     }
     return `${lines.join("\n")}\n`;
   }

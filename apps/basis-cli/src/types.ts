@@ -40,6 +40,12 @@ export interface OrderState {
   avgPrice: number;
 }
 
+export interface OpenOrderState extends OrderState {
+  side: LegSide;
+  price: number;
+  updateTimeMs: number;
+}
+
 export interface LegOrderState {
   exchange: Exchange;
   side: LegSide;
@@ -109,6 +115,7 @@ export interface ExchangeClient {
     reduceOnly: boolean
   ): Promise<{ orderId: string }>;
   getOrderStatus(symbol: string, orderId: string): Promise<OrderState>;
+  getOpenOrders(symbol: string): Promise<OpenOrderState[]>;
   cancelOrder(symbol: string, orderId: string): Promise<{ ok: boolean }>;
   getTickSize(symbol: string): Promise<number>;
   quantizePrice(price: number, symbol: string, side: LegSide): Promise<number>;
@@ -122,8 +129,12 @@ export interface LimitPrices {
 
 export interface ExchangePosition {
   symbol: string;
+  longQty: number;
+  shortQty: number;
   longNotionalUsdt: number;
   shortNotionalUsdt: number;
+  longAvgEntryPrice: number;
+  shortAvgEntryPrice: number;
 }
 
 export type Screen = "SYMBOL_SELECT" | "DASHBOARD";
