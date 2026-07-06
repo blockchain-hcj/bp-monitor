@@ -58,7 +58,7 @@ services:
     environment:
       CONTROL_PORT: 18380
       ALERT_HUB_URL: http://alert-hub:18280
-      WATCH_COINS: BTC,ETH,SOL
+      WATCH_COINS: 
       BWE_NEWS_ENABLED: "true"
       BWE_NEWS_WS_URL: wss://bwenews-api.bwe-ws.com/ws
       BWE_NEWS_HTTP_URL: https://rss-public.bwe-ws.com/
@@ -109,36 +109,6 @@ services:
           "node",
           "-e",
           "fetch('http://127.0.0.1:18081/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-
-  arb-engine:
-    build:
-      context: ./apps/arb-engine
-      dockerfile: Dockerfile
-    env_file:
-      - apps/arb-engine/.env
-    environment:
-      NATS_URL: nats://nats:4222
-    depends_on:
-      nats:
-        condition: service_started
-      monitor:
-        condition: service_healthy
-      alert-hub:
-        condition: service_healthy
-    ports:
-      - "18180:18180"
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:18180/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
         ]
       interval: 10s
       timeout: 3s
